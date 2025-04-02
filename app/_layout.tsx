@@ -5,6 +5,9 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
+import { Tabs } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { TouchableOpacity } from 'react-native';
 
 import { useColorScheme } from '@/hooks/useColorScheme';
 
@@ -29,11 +32,73 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
+      <Stack
+        screenOptions={{
+          headerStyle: {
+            backgroundColor: '#000000',
+          },
+          headerTintColor: '#FFFFFF',
+          contentStyle: {
+            backgroundColor: '#000000',
+          },
+        }}
+      >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="+not-found" />
       </Stack>
       <StatusBar style="auto" />
     </ThemeProvider>
+  );
+}
+
+export function TabLayout() {
+  return (
+    <Tabs
+      screenOptions={({ route }) => ({
+        tabBarIcon: ({ focused, color, size }) => {
+          let iconName: keyof typeof Ionicons.glyphMap = 'help-circle-outline';
+          
+          console.log('路由名称:', route.name);
+          
+          if (route.name === 'index') {
+            iconName = 'call-outline';
+          } else if (route.name === 'contacts') {
+            iconName = 'person-outline';
+          } else if (route.name === 'favorites') {
+            iconName = 'star-outline';
+          }
+          
+          return <Ionicons name={iconName} size={size} color={focused ? '#007AFF' : '#999999'} />;
+        },
+        tabBarActiveTintColor: '#007AFF',
+        tabBarInactiveTintColor: '#999999',
+        tabBarStyle: {
+          backgroundColor: '#222', 
+          borderTopWidth: 0,
+        },
+      })}
+    >
+      <Tabs.Screen 
+        name="index" 
+        options={{
+          title: '电话',
+          tabBarLabel: '电话'
+        }} 
+      />
+      <Tabs.Screen 
+        name="contacts" 
+        options={{
+          title: '联系人',
+          tabBarLabel: '联系人'
+        }} 
+      />
+      <Tabs.Screen 
+        name="favorites" 
+        options={{
+          title: '收藏',
+          tabBarLabel: '收藏'
+        }} 
+      />
+    </Tabs>
   );
 }

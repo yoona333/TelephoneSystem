@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>通话管理系统</title>
+    <style>
+        body {
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            color: #fff;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #333;
+        }
+        th {
+            background-color: #000;
+            color: #fff;
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .btn-answer {
+            background-color: #007bff;
+            color: white;
+        }
+        .btn-hangup {
+            background-color: #dc3545;
+            color: white;
+        }
+        .clear-btn {
+            background-color: #dc3545;
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            float: right;
+            margin-bottom: 20px;
+        }
+        #no-calls {
+            text-align: center;
+            margin-top: 50px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>通话管理系统</h1>
+        
+        <button id="clearBtn" class="clear-btn">清空</button>
+        
+        <table id="callTable">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>电话</th>
+                    <th>时间</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody id="callTableBody">
+                <!-- 通话记录将在这里动态添加 -->
+            </tbody>
+        </table>
+        
+        <div id="no-calls" style="display: none;">暂无通话记录</div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // 连接到Socket.io服务器
+        const socket = io();
+        
+        // 获取DOM元素
+        const callTableBody = document.getElementById('callTableBody');
+        const noCallsMessage = document.getElementById('no-calls');
+        const clearBtn = document.getElementById('clearBtn');
+        
+        // 存储活跃通话
+        let activeCalls = [];
+        
+        // 监听新的通话状态
+        socket.on('call_status', function(data) {
+            console.log('收到通话状态更新:', data);
+            
+            // 查找是否已存在该通话
+            const existingCallIndex = activeCalls.findIndex(call => call.callId === data.callId);
+            
+            if (data.status === 'ringing') {
+                // 新来电
+                if (existingCallIndex === -1) {
+                    const newCall = {
+                        callId: data.callId,
+                        phoneNumber: data.phoneNumber,
+                        status: data.status,
+                        time: formatTime(new Date())
+                    };
+                    activeCalls.push(newCall);
+                }
+            } else if (data.status === 'active') {
+                // 通话已接通
+                if (existingCallIndex !== -1) {
+                    activeCalls[existingCallIndex].status = 'active';
+                }
+            } else if (data.status === 'ended') {
+                // 通话已结束
+                if (existingCallIndex !== -1) {
+                    // 从活跃通话中移除
+                    activeCalls.splice(existingCallIndex, 1);
+                }
+            }
+            
+            // 更新UI
+            updateCallTable();
+        });
+        
+        // 更新通话表格
+        function updateCallTable() {
+            // 清空表格
+            callTableBody.innerHTML = '';
+            
+            if (activeCalls.length === 0) {
+                noCallsMessage.style.display = 'block';
+                return;
+            }
+            
+            noCallsMessage.style.display = 'none';
+            
+            // 添加每个通话记录
+            activeCalls.forEach((call, index) => {
+                const row = document.createElement('tr');
+                
+                // 序号列
+                const indexCell = document.createElement('td');
+                indexCell.textContent = index + 1;
+                row.appendChild(indexCell);
+                
+                // 电话号码列
+                const phoneCell = document.createElement('td');
+                phoneCell.textContent = call.phoneNumber;
+                row.appendChild(phoneCell);
+                
+                // 时间列
+                const timeCell = document.createElement('td');
+                timeCell.textContent = call.time;
+                row.appendChild(timeCell);
+                
+                // 操作列
+                const actionCell = document.createElement('td');
+                
+                // 接通按钮
+                const answerBtn = document.createElement('button');
+                answerBtn.textContent = '接通';
+                answerBtn.className = 'btn btn-answer';
+                answerBtn.style.marginRight = '10px';
+                answerBtn.onclick = function() {
+                    answerCall(call.callId);
+                };
+                
+                // 挂断按钮
+                const hangupBtn = document.createElement('button');
+                hangupBtn.textContent = '挂断';
+                hangupBtn.className = 'btn btn-hangup';
+                hangupBtn.onclick = function() {
+                    hangupCall(call.callId);
+                };
+                
+                // 根据通话状态禁用按钮
+                if (call.status === 'active') {
+                    answerBtn.disabled = true;
+                    answerBtn.style.opacity = '0.5';
+                }
+                
+                actionCell.appendChild(answerBtn);
+                actionCell.appendChild(hangupBtn);
+                row.appendChild(actionCell);
+                
+                callTableBody.appendChild(row);
+            });
+        }
+        
+        // 接通电话
+        function answerCall(callId) {
+            fetch('/api/answer', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ callId })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('接通电话响应:', data);
+            })
+            .catch(error => {
+                console.error('接通电话失败:', error);
+            });
+        }
+        
+        // 挂断电话
+        function hangupCall(callId) {
+            fetch('/api/hangup', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ callId })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('挂断电话响应:', data);
+            })
+            .catch(error => {
+                console.error('挂断电话失败:', error);
+            });
+        }
+        
+        // 清空所有通话
+        clearBtn.addEventListener('click', function() {
+            // 挂断所有活跃通话
+            activeCalls.forEach(call => {
+                hangupCall(call.callId);
+            });
+            
+            // 清空列表
+            activeCalls = [];
+            updateCallTable();
+        });
+        
+        // 格式化时间为 HH:MM:SS
+        function formatTime(date) {
+            const hours = date.getHours().toString().padStart(2, '0');
+            const minutes = date.getMinutes().toString().padStart(2, '0');
+            const seconds = date.getSeconds().toString().padStart(2, '0');
+            return `${hours}:${minutes}:${seconds}`;
+        }
+        
+        // 初始化
+        updateCallTable();
+    </script>
+</body>
+</html> 
