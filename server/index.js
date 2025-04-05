@@ -195,11 +195,11 @@ function addCallRecord(phoneNumber, status, duration = null) {
   console.log(`\n=======================================`);
   console.log(`添加通话记录: ${phoneNumber} | ${status} | ${duration || 'N/A'}`);
   
-  // 检查最近5秒内是否有相同的记录
-  const recentTime = Date.now() - 5000; // 5秒前
+  // 检查最近30秒内是否有相同的记录 (增加时间窗口并改进检测逻辑)
+  const recentTime = Date.now() - 30000; // 30秒前
   const hasDuplicate = callRecords.some(record => 
     record.phoneNumber === phoneNumber && 
-    record.status === status &&
+    (record.status === status || (status === "已挂断" && record.status === "已接通")) &&
     record.timestamp > recentTime
   );
   
@@ -212,7 +212,7 @@ function addCallRecord(phoneNumber, status, duration = null) {
   
   // 创建记录
   const record = {
-    id: Date.now(),
+    id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`, // 使ID更加唯一
     phoneNumber,
     timestamp: Date.now(),
     time: formatTime(Date.now()),
@@ -544,9 +544,19 @@ app.post('/api/clear-history', (req, res) => {
     // 清空记录数组
     callRecords.length = 0;
     
+    // 也清空活跃通话
+    activeCalls.clear();
+    
     // 保存到文件
     saveCallRecords();
     
+    // 广播清空事件
+    io.emit('records_cleared', { 
+      timestamp: Date.now(),
+      message: '所有通话记录已清空'
+    });
+    
+    console.log('所有通话记录已清空');
     res.json({ success: true, message: '通话记录已清空' });
   } catch (error) {
     console.error('清空通话记录失败:', error);
@@ -681,10 +691,16 @@ app.get('/api/merged-call-records', (req, res) => {
       }
     });
     
-    // 转换为数组
-    const mergedRecords = Array.from(phoneNumberMap.values());
+    // 转换为数组并再次按时间戳排序，确保最新的记录在前面
+    const mergedRecords = Array.from(phoneNumberMap.values())
+      .sort((a, b) => b.timestamp - a.timestamp);
     
-    console.log(`返回 ${mergedRecords.length} 条合并后的通话记录`);
+    console.log(`返回 ${mergedRecords.length} 条合并后的通话记录，总记录数: ${callRecords.length}`);
+    
+    // 记录所有电话号码，方便调试
+    const phoneNumbers = mergedRecords.map(r => r.phoneNumber);
+    console.log(`返回的号码列表: ${phoneNumbers.join(', ')}`);
+    
     res.json(mergedRecords);
   } catch (error) {
     console.error('获取合并后通话记录失败:', error);

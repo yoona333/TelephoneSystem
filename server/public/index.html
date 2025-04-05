@@ -107,7 +107,7 @@
         // 加载通话记录
         async function loadCallRecords() {
             try {
-                const response = await fetch('/api/call-records', {
+                const response = await fetch('/api/merged-call-records', {
                     cache: 'no-cache',
                     headers: {
                         'Cache-Control': 'no-cache'
@@ -120,8 +120,7 @@
                     return;
                 }
                 
-                // 按时间戳降序排列
-                records.sort((a, b) => b.timestamp - a.timestamp);
+                // 不需要再次排序，API已经返回排序后的数据
                 
                 let html = '';
                 records.forEach((record, index) => {
@@ -254,6 +253,13 @@
                 if (data.status === 'ringing' || data.status === 'ended') {
                     setTimeout(loadCallRecords, 500);
                 }
+            });
+            
+            socket.on('records_cleared', (data) => {
+                console.log('收到记录清空事件:', data);
+                
+                // 立即刷新列表
+                loadCallRecords();
             });
             
             socket.on('connect_error', (error) => {
