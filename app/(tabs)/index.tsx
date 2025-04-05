@@ -228,6 +228,11 @@ export default function PhoneScreen() {
     
     // 添加Socket.IO事件监听，实时更新通话记录
     const handleCallRecordUpdate = (record: any) => {
+      if (!record) {
+        console.log('收到无效的通话记录更新');
+        return;
+      }
+      
       console.log('收到服务器通话记录更新:', record);
       
       // 确定记录类型
@@ -243,10 +248,10 @@ export default function PhoneScreen() {
       
       // 转换为本地记录格式
       const localRecord: CallItem = {
-        id: record.id.toString(),
+        id: record.id ? record.id.toString() : Date.now().toString(),
         name: '',
-        number: record.phoneNumber,
-        date: formatDate(new Date(record.timestamp)),
+        number: record.phoneNumber || '',
+        date: formatDate(new Date(record.timestamp || Date.now())),
         type: recordType
       };
       
@@ -255,16 +260,28 @@ export default function PhoneScreen() {
     };
     
     // 订阅通话记录更新
-    CallService.subscribeToCallRecords(handleCallRecordUpdate);
+    try {
+      CallService.subscribeToCallRecords(handleCallRecordUpdate);
+    } catch (error) {
+      console.error('订阅通话记录更新失败:', error);
+    }
     
     // 定期同步记录（每5分钟同步一次）
     const syncInterval = setInterval(() => {
-      syncRecordsWithServer();
+      try {
+        syncRecordsWithServer();
+      } catch (error) {
+        console.error('定期同步记录失败:', error);
+      }
     }, 5 * 60 * 1000);
     
     return () => {
       clearInterval(syncInterval);
-      // TODO: 取消订阅CallService.unsubscribeFromCallRecords
+      try {
+        CallService.unsubscribeFromCallRecords(handleCallRecordUpdate);
+      } catch (error) {
+        console.error('取消订阅通话记录更新失败:', error);
+      }
     };
   }, []);
   
@@ -377,20 +394,34 @@ export default function PhoneScreen() {
   // 在通话结束后同步记录
   useEffect(() => {
     const handleCallStatus = (data: any) => {
+      if (!data) return;
+      
       // 只在通话结束时处理
       if (data.status === 'ended' && data.phoneNumber) {
         // 延迟2秒再同步，确保服务器有时间保存记录
         setTimeout(() => {
-          syncRecordsWithServer();
+          try {
+            syncRecordsWithServer();
+          } catch (error) {
+            console.error('通话结束后同步记录失败:', error);
+          }
         }, 2000);
       }
     };
     
     // 添加监听器
-    CallService.subscribeToCallStatus(handleCallStatus);
+    try {
+      CallService.subscribeToCallStatus(handleCallStatus);
+    } catch (error) {
+      console.error('订阅通话状态更新失败:', error);
+    }
     
     return () => {
-      CallService.unsubscribeFromCallStatus(handleCallStatus);
+      try {
+        CallService.unsubscribeFromCallStatus(handleCallStatus);
+      } catch (error) {
+        console.error('取消订阅通话状态更新失败:', error);
+      }
     };
   }, [callHistory]);
 

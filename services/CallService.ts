@@ -45,6 +45,26 @@ const debounceCall = (() => {
   };
 })();
 
+// 在 socketIo 连接上添加事件监听器
+const addSocketListeners = () => {
+  if (!socket) return;
+  
+  // 监听通话状态更新
+  socket.on('call_status', (data: any) => {
+    console.log('收到通话状态更新:', data);
+    CallService.handleCallStatusUpdate(data);
+  });
+  
+  // 添加更多连接状态监听
+  socket.io.on('reconnect_attempt', (attempt: number) => {
+    console.log(`尝试重新连接服务器 (${attempt})`);
+  });
+
+  socket.io.on('reconnect', (attempt: number) => {
+    console.log(`重新连接服务器成功，经过 ${attempt} 次尝试`);
+  });
+};
+
 // 确保Socket连接
 const ensureSocketConnection = async (): Promise<void> => {
   // 如果已经连接，直接返回
@@ -123,6 +143,10 @@ const ensureSocketConnection = async (): Promise<void> => {
         console.log('Socket连接成功到:', API_URL);
         console.log('Socket ID:', socket.id);
         isConnecting = false;
+        
+        // 连接成功后添加事件监听器
+        addSocketListeners();
+        
         resolve();
       });
       
@@ -141,24 +165,9 @@ const ensureSocketConnection = async (): Promise<void> => {
         if (reason === 'ping timeout' || reason === 'transport close') {
           console.log('尝试重新连接...');
           setTimeout(() => {
-            socket.connect();
+            if (socket) socket.connect();
           }, 1000);
         }
-      });
-      
-      // 监听通话状态更新
-      socket.on('call_status', (data: any) => {
-        console.log('收到通话状态更新:', data);
-        CallService.handleCallStatusUpdate(data);
-      });
-      
-      // 添加更多连接状态监听
-      socket.io.on('reconnect_attempt', (attempt: number) => {
-        console.log(`尝试重新连接服务器 (${attempt})`);
-      });
-
-      socket.io.on('reconnect', (attempt: number) => {
-        console.log(`重新连接服务器成功，经过 ${attempt} 次尝试`);
       });
       
     } catch (error) {
@@ -267,12 +276,37 @@ const CallService = {
   
   // 订阅通话状态更新
   subscribeToCallStatus: (callback: (data: any) => void): void => {
+    if (!socket) {
+      console.log('Socket未初始化，无法订阅通话状态更新');
+      // 将回调存储起来，等socket连接后再添加
+      setTimeout(() => {
+        if (socket) {
+          console.log('Socket已就绪，添加通话状态更新监听');
+          socket.on('call_status', callback);
+        } else {
+          console.log('Socket仍未就绪，无法添加监听');
+        }
+      }, 2000);
+      return;
+    }
+
     callStatusListeners.push(callback);
+    
+    // 添加直接监听
+    socket.on('call_status', callback);
   },
   
   // 取消订阅
   unsubscribeFromCallStatus: (callback: (data: any) => void): void => {
+    if (!socket) {
+      console.log('Socket未初始化，无需取消订阅');
+      return;
+    }
+    
     callStatusListeners = callStatusListeners.filter(listener => listener !== callback);
+    
+    // 移除直接监听
+    socket.off('call_status', callback);
   },
   
   // 检查服务器状态
@@ -346,7 +380,31 @@ const CallService = {
   
   // 订阅通话记录更新
   subscribeToCallRecords: (callback: (record: any) => void): void => {
+    if (!socket) {
+      console.log('Socket未初始化，无法订阅通话记录更新');
+      // 将回调存储起来，等socket连接后再添加
+      setTimeout(() => {
+        if (socket) {
+          console.log('Socket已就绪，添加通话记录更新监听');
+          socket.on('call_record_update', callback);
+        } else {
+          console.log('Socket仍未就绪，无法添加监听');
+        }
+      }, 2000);
+      return;
+    }
+    
     socket.on('call_record_update', callback);
+  },
+  
+  // 取消订阅通话记录更新
+  unsubscribeFromCallRecords: (callback: (record: any) => void): void => {
+    if (!socket) {
+      console.log('Socket未初始化，无需取消订阅');
+      return;
+    }
+    
+    socket.off('call_record_update', callback);
   },
   
   // 添加手机记录同步方法
