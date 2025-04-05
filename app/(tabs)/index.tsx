@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { StyleSheet, TouchableOpacity, View, Text, FlatList, Dimensions, StatusBar, Modal, SafeAreaView, Platform, Animated } from 'react-native';
+import { StyleSheet, TouchableOpacity, View, Text, FlatList, Dimensions, StatusBar, Modal, SafeAreaView, Platform, Animated, Alert, TextInput, Switch, Easing, Keyboard, ActivityIndicator } from 'react-native';
 import { ThemedView } from '@/components/ThemedView';
 import { ThemedText } from '@/components/ThemedText';
 import { useColorScheme } from '@/hooks/useColorScheme';
@@ -11,8 +11,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_URL } from '@/services/CallService';
 import { Stack } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
-import { Haptics, ImpactFeedbackStyle } from '@/utils/Haptics';
+import * as ExpoHaptics from 'expo-haptics';
 import { getPhoneLocation } from '@/services/PhoneLocationService';
+import io from 'socket.io-client';
+
 // 获取屏幕宽度和高度
 const { width, height } = Dimensions.get('window');
 
@@ -46,6 +48,57 @@ interface MenuItem {
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
 }
+
+// 自定义FourDots组件
+const FourDots = () => {
+  const colorScheme = useColorScheme();
+  const isDark = colorScheme === 'dark';
+  
+  return (
+    <View style={{ 
+      width: 24, 
+      height: 24, 
+      flexDirection: 'row', 
+      flexWrap: 'wrap', 
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 3
+    }}>
+      <View style={{ flexDirection: 'row' }}>
+        <View style={{ 
+          width: 3.5, 
+          height: 3.5, 
+          borderRadius: 1.5, 
+          backgroundColor: isDark ? '#FFFFFF' : '#000000', 
+          margin: 3.5 
+        }} />
+        <View style={{ 
+          width: 3.5, 
+          height: 3.5, 
+          borderRadius: 1.5, 
+          backgroundColor: isDark ? '#FFFFFF' : '#000000', 
+          margin: 3.5 
+        }} />
+      </View>
+      <View style={{ flexDirection: 'row' }}>
+        <View style={{ 
+          width: 3.5, 
+          height: 3.5, 
+          borderRadius: 1.5, 
+          backgroundColor: isDark ? '#FFFFFF' : '#000000', 
+          margin: 3.5 
+        }} />
+        <View style={{ 
+          width: 3.5, 
+          height: 3.5, 
+          borderRadius: 1.5, 
+          backgroundColor: isDark ? '#FFFFFF' : '#000000', 
+          margin: 3.5 
+        }} />
+      </View>
+    </View>
+  );
+};
 
 // 1. 创建一个单独的CallItem组件
 const CallItemComponent = React.memo(({ item, onPress, handleCall }: { 
@@ -208,6 +261,115 @@ export default function PhoneScreen() {
   // 添加节流函数
   const throttleFlag = useRef(false);
 
+  // 添加搜索词
+  const [searchTerm, setSearchTerm] = useState('');
+
+  // 添加服务器状态
+  const [serverStatus, setServerStatus] = useState('unknown');
+
+  // 添加下拉菜单状态
+  const [dropdownVisible, setDropdownVisible] = useState(false);
+
+  // 添加加载服务器记录状态
+  const [loadingServerRecords, setLoadingServerRecords] = useState(false);
+
+  // 获取socket连接
+  const socketRef = useRef<any>(null);
+  
+  useEffect(() => {
+    // 初始化socket连接
+    const initSocket = async () => {
+      try {
+        // 连接到服务器
+        socketRef.current = io(API_URL, {
+          transports: ['polling', 'websocket'],
+          reconnection: true
+        });
+        
+        // 设置连接事件
+        socketRef.current.on('connect', () => {
+          console.log('Socket连接成功, ID:', socketRef.current.id);
+        });
+        
+        socketRef.current.on('disconnect', (reason: string) => {
+          console.log('Socket断开连接:', reason);
+        });
+        
+        // 订阅服务器通话记录实时更新
+        CallService.subscribeToCallRecords((record) => {
+          console.log('收到服务器记录更新:', record);
+          // 将服务器记录转换为客户端格式
+          if (record && record.phoneNumber) {
+            try {
+              // 确定记录类型
+              let recordType: 'outgoing' | 'incoming' | 'missed' = 'missed';
+              if (record.status === '已拨打') recordType = 'outgoing';
+              else if (record.status === '已接听') recordType = 'incoming';
+              
+              const callItem: CallItem = {
+                id: record.id || `${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+                name: '',
+                number: record.phoneNumber,
+                date: formatDate(new Date(record.timestamp || Date.now())),
+                type: recordType
+              };
+              
+              // 添加到本地记录
+              addNewCallRecord(callItem);
+            } catch (e) {
+              console.error('处理服务器记录更新失败:', e);
+            }
+          }
+        });
+        
+        // 也监听记录全量更新事件
+        const handleRecordsUpdated = () => {
+          console.log('收到服务器记录全量更新通知');
+          // 手动调用函数，而不是引用它
+          setLoadingServerRecords(true);
+          CallService.getCallRecords()
+            .then(records => {
+              console.log('获取到最新服务器记录:', records.length, '条');
+              if (records.length > 0) {
+                setCallHistory(prevHistory => {
+                  const merged = mergeWithServerRecords(prevHistory, records);
+                  saveCallHistory(merged);
+                  return merged;
+                });
+              }
+            })
+            .catch(e => console.error('获取服务器记录失败:', e))
+            .finally(() => setLoadingServerRecords(false));
+        };
+        
+        // 添加Socket事件监听
+        socketRef.current.on('records_updated', handleRecordsUpdated);
+        socketRef.current.on('phone_record_update', (data: any) => {
+          console.log('收到手机记录更新:', data);
+          if (data.type === 'sync_complete') {
+            handleRecordsUpdated();
+          }
+        });
+      } catch (error) {
+        console.error('初始化Socket失败:', error);
+      }
+    };
+    
+    // 调用初始化
+    initSocket();
+    
+    // 清理函数
+    return () => {
+      console.log('取消订阅服务器通话记录更新');
+      CallService.unsubscribeFromCallRecords(() => {});
+      if (socketRef.current) {
+        socketRef.current.off('records_updated');
+        socketRef.current.off('phone_record_update');
+        socketRef.current.disconnect();
+      }
+    };
+  }, []);
+
   // 加载通话记录
   useEffect(() => {
     loadCallHistory();
@@ -215,84 +377,60 @@ export default function PhoneScreen() {
     // 从服务器加载通话记录并合并
     const loadServerRecords = async () => {
       try {
-        console.log('尝试从服务器获取通话记录...');
-        // 使用新的API端点获取记录
+        setLoadingServerRecords(true);
         const serverRecords = await CallService.getCallRecords();
         
-        // 如果获取到记录，合并到本地
-        if (serverRecords && serverRecords.length > 0) {
-          console.log(`从服务器获取了 ${serverRecords.length} 条通话记录`);
-          mergeServerRecords(serverRecords);
+        console.log(`从服务器获取到 ${serverRecords.length} 条记录`);
+        
+        // 确保每条记录都有唯一ID
+        const processedRecords = serverRecords.map(record => {
+          if (!record.id || record.id.trim() === '') {
+            return {
+              ...record,
+              id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+            };
+          }
+          return record;
+        });
+        
+        // 由于我们现在可能有重复记录，我们需要合并它们
+        setCallHistory(prevHistory => {
+          // 创建一个新的记录数组，确保每条记录都是唯一的
+          const allRecords = [...processedRecords, ...prevHistory];
           
-          // 明确表示同步成功
-          console.log('通话记录同步成功并合并到本地');
-        } else {
-          console.log('服务器没有返回任何通话记录');
-        }
+          // 使用Map来确保唯一ID
+          const uniqueRecordsMap = new Map<string, CallItem>();
+          
+          // 按时间顺序处理，保证新的记录会覆盖旧的
+          allRecords.forEach(record => {
+            // 如果记录有id，则使用id作为key；否则使用号码+时间作为key
+            const key = record.id || `${record.number}-${record.date}`;
+            uniqueRecordsMap.set(key, record);
+          });
+          
+          // 将Map转换回数组
+          const uniqueRecords = Array.from(uniqueRecordsMap.values());
+          
+          // 按日期降序排序
+          const sortedRecords = uniqueRecords.sort((a, b) => 
+            parseDate(b.date).getTime() - parseDate(a.date).getTime()
+          );
+          
+          console.log(`合并后共有 ${sortedRecords.length} 条记录`);
+          
+          // 保存到本地存储并返回
+          saveCallHistory(sortedRecords);
+          return sortedRecords;
+        });
       } catch (error) {
-        console.error('加载服务器通话记录失败:', error);
+        console.error('加载服务器记录失败:', error);
+        Alert.alert('提示', '从服务器加载通话记录失败，将使用本地记录');
+      } finally {
+        setLoadingServerRecords(false);
       }
     };
     
     loadServerRecords();
-    
-    // 添加Socket.IO事件监听，实时更新通话记录
-    const handleCallRecordUpdate = (record: any) => {
-      if (!record) {
-        console.log('收到无效的通话记录更新');
-        return;
-      }
-      
-      console.log('收到服务器通话记录更新:', record);
-      
-      // 确定记录类型
-      let recordType: 'outgoing' | 'incoming' | 'missed';
-      
-      if (record.status === '已拨打') {
-        recordType = 'outgoing';
-      } else if (record.status === '已接听') {
-        recordType = 'incoming';
-      } else {
-        recordType = 'missed';
-      }
-      
-      // 转换为本地记录格式
-      const localRecord: CallItem = {
-        id: record.id ? record.id.toString() : Date.now().toString(),
-        name: '',
-        number: record.phoneNumber || '',
-        date: formatDate(new Date(record.timestamp || Date.now())),
-        type: recordType
-      };
-      
-      // 添加到本地记录
-      addNewCallRecord(localRecord);
-    };
-    
-    // 订阅通话记录更新
-    try {
-      CallService.subscribeToCallRecords(handleCallRecordUpdate);
-    } catch (error) {
-      console.error('订阅通话记录更新失败:', error);
-    }
-    
-    // 定期同步记录（每5分钟同步一次）
-    const syncInterval = setInterval(() => {
-      try {
-        syncRecordsWithServer();
-      } catch (error) {
-        console.error('定期同步记录失败:', error);
-      }
-    }, 5 * 60 * 1000);
-    
-    return () => {
-      clearInterval(syncInterval);
-      try {
-        CallService.unsubscribeFromCallRecords(handleCallRecordUpdate);
-      } catch (error) {
-        console.error('取消订阅通话记录更新失败:', error);
-      }
-    };
   }, []);
   
   // 合并服务器记录到本地记录
@@ -349,15 +487,22 @@ export default function PhoneScreen() {
   
   // 添加新的通话记录，避免重复
   const addNewCallRecord = (record: CallItem) => {
+    // 确保记录有一个唯一ID
+    if (!record.id || record.id.trim() === '') {
+      record.id = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+    }
+    
     setCallHistory(prevHistory => {
-      // 检查是否已存在相同号码和时间（5分钟内）的记录
+      // 检查是否已存在完全相同的记录
       const isDuplicate = prevHistory.some(existing => 
-        existing.number === record.number &&
-        Math.abs(parseDate(existing.date).getTime() - parseDate(record.date).getTime()) < 5 * 60 * 1000
+        existing.id === record.id || (
+          existing.number === record.number &&
+          Math.abs(parseDate(existing.date).getTime() - parseDate(record.date).getTime()) < 5000 // 5秒内的记录
+        )
       );
       
       if (isDuplicate) {
-        console.log('跳过添加重复记录:', record.number);
+        console.log('跳过添加完全相同的记录:', record.number, record.id);
         return prevHistory;
       }
       
@@ -368,6 +513,10 @@ export default function PhoneScreen() {
       
       // 保存到本地存储
       saveCallHistory(updated);
+      
+      // 立即同步到服务器
+      syncRecordsWithServer();
+      
       return updated;
     });
   };
@@ -456,8 +605,8 @@ export default function PhoneScreen() {
     }
   };
 
-  // 修改添加通话记录的逻辑，防止重复添加
-  const addCallRecord = (number: string, type: 'outgoing' | 'incoming' | 'missed') => {
+  // 修改添加通话记录的逻辑，防止重复添加并立即同步到服务器
+  const addCallRecord = async (number: string, type: 'outgoing' | 'incoming' | 'missed') => {
     // 检查号码是否有效
     if (!number || number.trim() === '') {
       console.log('拒绝添加空电话号码记录');
@@ -466,8 +615,11 @@ export default function PhoneScreen() {
     
     console.log('添加通话记录:', number, type);
     
+    // 生成真正唯一的ID（时间戳+随机数）
+    const uniqueId = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+    
     const newCall: CallItem = {
-      id: Date.now().toString(),
+      id: uniqueId,
       name: '', // 可以从联系人列表中查找名称
       number,
       date: formatDate(new Date()),
@@ -476,42 +628,69 @@ export default function PhoneScreen() {
 
     // 使用函数式更新确保最新状态
     setCallHistory(prevHistory => {
-      // 检查是否已经存在相同号码且时间接近的记录（30秒内）
-      const now = new Date();
-      const recentCall = prevHistory.find(call => {
-        // 检查号码是否相同
-        if (call.number !== number) return false;
-        
-        // 检查时间是否在30秒内
-        const callDate = parseDate(call.date);
-        const diffSeconds = Math.abs((now.getTime() - callDate.getTime()) / 1000);
-        return diffSeconds < 30;
-      });
-      
-      // 如果已存在近期记录，不添加新记录
-      if (recentCall) {
-        console.log('跳过添加重复记录:', number);
+      // 检查是否存在完全相同的记录（5秒内的相同号码）
+      const isDuplicate = prevHistory.some(
+        item => item.number === number &&
+        Math.abs(parseDate(item.date).getTime() - Date.now()) < 5000
+      );
+
+      if (isDuplicate) {
+        console.log('跳过添加重复通话记录');
         return prevHistory;
       }
-      
-      // 添加新记录并立即排序
-      const updatedHistory = [newCall, ...prevHistory]
-        .sort((a, b) => parseDate(b.date).getTime() - parseDate(a.date).getTime());
-      
-      // 保存到AsyncStorage
-      saveCallHistory(updatedHistory).catch(e => 
-        console.error('保存通话记录失败:', e)
-      );
-      
-      // 尝试将记录同步到服务器
+
+      const updated = [newCall, ...prevHistory];
+      // 本地存储
+      saveCallHistory(updated);
+      // 立即同步到服务器
       setTimeout(() => {
-        syncRecordsWithServer().catch(e => 
-          console.error('同步记录到服务器失败:', e)
-        );
+        CallService.syncCallRecords(updated)
+          .then(serverRecords => {
+            console.log('通话记录已同步至服务器，返回了', serverRecords.length, '条记录');
+            // 如果服务器返回的记录与本地不同，更新本地记录
+            if (serverRecords.length > 0) {
+              setCallHistory(current => {
+                const merged = mergeWithServerRecords(current, serverRecords);
+                saveCallHistory(merged);
+                return merged;
+              });
+            }
+          })
+          .catch(err => console.error('同步通话记录失败:', err));
       }, 500);
       
-      return updatedHistory;
+      return updated;
     });
+  };
+
+  // 添加辅助函数合并服务器记录
+  const mergeWithServerRecords = (localRecords: CallItem[], serverRecords: any[]): CallItem[] => {
+    // 创建ID映射以检测重复
+    const idMap = new Map<string, boolean>();
+    localRecords.forEach(record => idMap.set(record.id, true));
+    
+    // 转换服务器记录为客户端格式并添加不重复的记录
+    const newRecords = serverRecords
+      .filter(sr => !idMap.has(sr.id))
+      .map(sr => {
+        // 确定记录类型
+        let recordType: 'outgoing' | 'incoming' | 'missed' = 'missed';
+        if (sr.status === '已拨打') recordType = 'outgoing';
+        else if (sr.status === '已接听') recordType = 'incoming';
+        
+        return {
+          id: sr.id,
+          name: '',
+          number: sr.phoneNumber,
+          date: formatDate(new Date(sr.timestamp)),
+          type: recordType
+        } as CallItem;
+      });
+    
+    // 合并并排序
+    return [...localRecords, ...newRecords].sort(
+      (a, b) => parseDate(b.date).getTime() - parseDate(a.date).getTime()
+    );
   };
 
   // 添加辅助函数解析日期字符串
@@ -619,7 +798,7 @@ export default function PhoneScreen() {
     
     // 添加触觉反馈
     if (Platform.OS === 'ios') {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      ExpoHaptics.impactAsync(ExpoHaptics.ImpactFeedbackStyle.Light);
     }
   };
 
@@ -690,9 +869,49 @@ export default function PhoneScreen() {
   };
 
   // 清空通话记录
-  const clearCallHistory = () => {
-    setCallHistory([]);
-    saveCallHistory([]);
+  const clearCallHistory = async () => {
+    try {
+      console.log('开始清空所有通话记录...');
+      
+      // 清空本地记录
+      setCallHistory([]);
+      await AsyncStorage.setItem(CALL_HISTORY_STORAGE_KEY, JSON.stringify([]));
+      
+      // 调用服务方法清空服务器记录
+      const success = await CallService.clearCallRecords();
+      
+      if (success) {
+        console.log('服务器和本地通话记录已全部清空');
+        // 重置最后同步时间
+        setLastSyncTime(null);
+        
+        // 触发震动反馈
+        if (Platform.OS === 'ios') {
+          ExpoHaptics.impactAsync(ExpoHaptics.ImpactFeedbackStyle.Medium);
+        }
+      } else {
+        console.error('清空服务器记录失败');
+        // 尝试直接调用API
+        try {
+          const response = await fetch(`${API_URL}/api/clear-history`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          });
+          
+          if (response.ok) {
+            console.log('直接调用API清空服务器记录成功');
+          } else {
+            console.error('直接调用API清空服务器记录也失败了');
+          }
+        } catch (error) {
+          console.error('直接调用清空API出错:', error);
+        }
+      }
+    } catch (error) {
+      console.error('清空通话记录失败:', error);
+    }
   };
 
   // 修改显示/隐藏拨号盘的函数
@@ -872,64 +1091,117 @@ export default function PhoneScreen() {
     }
   };
 
-  // 菜单选项
-  const menuItems: MenuItem[] = [
-    { id: 'paste', label: '粘贴', icon: 'copy-outline' },
-    { id: 'record', label: '通话录音', icon: 'recording-outline' },
-    { id: 'delete', label: '批量删除', icon: 'trash-outline' },
-    { id: 'block', label: '骚扰拦截', icon: 'shield-outline' },
-    { id: 'settings', label: '设置', icon: 'settings-outline' },
-    { id: 'offline', label: '切换到离线模式', icon: 'cloud-offline' },
-  ];
-
-  // 处理菜单项点击
-  const handleMenuItemPress = (id: string) => {
-    setMenuVisible(false);
-    switch (id) {
-      case 'paste':
-        // 处理粘贴
-        break;
-      case 'record':
-        // 处理通话录音
-        break;
-      case 'delete':
-        // 处理批量删除
-        break;
-      case 'block':
-        // 处理骚扰拦截
-        break;
-      case 'settings':
-        // 处理设置
-        break;
-      case 'offline':
-        setIsOfflineMode(!isOfflineMode);
-        break;
-    }
-  };
-
-  // 在 PhoneScreen 组件中添加
+  // 修改定期同步的useEffect，只保留初始同步，删除定时器
   useEffect(() => {
-    
-    // 检查服务器连接
-    const checkConnection = async () => {
+    // 首次加载时执行一次同步
+    const initialSync = async () => {
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
-        
-        const response = await fetch(`${API_URL}/api/status`, {
-          signal: controller.signal
-        }).catch(() => null);
-        
-        clearTimeout(timeoutId);
-        setServerConnected(!!response);
+        console.log('应用启动时执行自动同步...');
+        await autoSyncWithServer();
       } catch (error) {
-        setServerConnected(false);
-        console.log('Server connection failed, using offline mode');
+        console.error('初始同步失败:', error);
       }
     };
     
-    checkConnection();
+    initialSync();
   }, []);
+  
+  // 自动同步功能
+  const autoSyncWithServer = async () => {
+    try {
+      // 检查是否有网络连接
+      const isConnected = await CallService.checkConnection();
+      if (!isConnected) {
+        console.log('无法连接到服务器，跳过自动同步');
+        return;
+      }
+      
+      console.log('执行自动同步...');
+      setIsSyncing(true);
+      
+      // 获取服务器记录
+      const serverRecords = await CallService.getCallRecords();
+      
+      if (serverRecords && serverRecords.length > 0) {
+        console.log(`从服务器获取了 ${serverRecords.length} 条通话记录`);
+        mergeServerRecords(serverRecords);
+        
+        // 同步本地记录到服务器
+        await CallService.syncCallRecords(callHistory);
+        
+        console.log('自动同步完成');
+      }
+    } catch (error) {
+      console.error('自动同步失败:', error);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+  
+  // 定义菜单项
+  const menuItems: MenuItem[] = [
+    {
+      id: 'paste',
+      label: '粘贴',
+      icon: 'clipboard-outline'
+    },
+    {
+      id: 'record',
+      label: '通话录音',
+      icon: 'mic-outline'
+    },
+    {
+      id: 'batchDelete',
+      label: '批量删除',
+      icon: 'trash-outline'
+    },
+    {
+      id: 'block',
+      label: '强拉拦截',
+      icon: 'shield-outline'
+    },
+    {
+      id: 'settings',
+      label: '设置',
+      icon: 'settings-outline'
+    }
+  ];
+  
+  // 处理菜单项点击
+  const handleMenuItemPress = (id: string) => {
+    setMenuVisible(false);
+    
+    switch (id) {
+      case 'paste':
+        // 处理粘贴操作
+        // 这里可以添加从剪贴板获取号码的功能
+        Alert.alert('提示', '粘贴功能暂未实现');
+        break;
+      case 'record':
+        // 处理通话录音
+        Alert.alert('提示', '通话录音功能暂未实现');
+        break;
+      case 'batchDelete':
+        // 批量删除功能
+        Alert.alert(
+          '确认删除',
+          '是否清空通话记录？',
+          [
+            { text: '取消', style: 'cancel' },
+            { text: '确认', onPress: clearCallHistory }
+          ]
+        );
+        break;
+      case 'block':
+        // 强拉拦截
+        Alert.alert('提示', '强拉拦截功能暂未实现');
+        break;
+      case 'settings':
+        // 设置页面跳转
+        Alert.alert('提示', '设置页面暂未实现');
+        break;
+    }
+  };
 
   // 添加以下代码：当标签页获取焦点时重置拨号盘状态
   useFocusEffect(
@@ -1049,17 +1321,33 @@ export default function PhoneScreen() {
         // 更新最后同步时间
         setLastSyncTime(new Date());
         
-        // 触发震动反馈
-        Haptics.impactAsync(ImpactFeedbackStyle.Light);
+        // 触发震动反馈 - 使用ExpoHaptics替代
+        if (Platform.OS === 'ios') {
+          ExpoHaptics.impactAsync(ExpoHaptics.ImpactFeedbackStyle.Light);
+        }
         
         console.log('同步完成');
-      } else {
-        console.log('服务器没有返回任何记录');
       }
     } catch (error) {
       console.error('手动同步失败:', error);
     } finally {
       setIsSyncing(false);
+    }
+  };
+
+  // 保留checkServerConnection函数，因为在其他地方还会用到它
+  const checkServerConnection = async () => {
+    try {
+      setCheckingServer(true);
+      const isConnected = await CallService.checkConnection();
+      setServerAwake(isConnected);
+      
+      // 显示结果，但现在用不到了
+      setCheckingServer(false);
+    } catch (error) {
+      console.error('检查服务器状态时出错:', error);
+      setServerAwake(false);
+      setCheckingServer(false);
     }
   };
 
@@ -1082,26 +1370,10 @@ export default function PhoneScreen() {
               onPress={() => setMenuVisible(!menuVisible)}
               hitSlop={{ top: 15, right: 15, bottom: 15, left: 15 }}
             >
-              <Ionicons 
-                name="ellipsis-horizontal-circle" 
-                size={22} 
-                color={isDark ? "#FFFFFF" : "#000000"} 
-              />
+              <FourDots />
             </TouchableOpacity>
           ),
-          headerLeft: () => (
-            <TouchableOpacity 
-              style={styles.syncButton}
-              onPress={handleManualSync}
-              disabled={isSyncing}
-            >
-              <Ionicons 
-                name={isSyncing ? "sync-circle" : "sync-outline"} 
-                size={22} 
-                color={isDark ? (isSyncing ? "#007AFF" : "#FFFFFF") : (isSyncing ? "#007AFF" : "#000000")} 
-              />
-            </TouchableOpacity>
-          ),
+          headerLeft: () => null,
         }}
       />
       
@@ -1116,20 +1388,17 @@ export default function PhoneScreen() {
             />
             <View style={[
               styles.menuContainer,
-              { backgroundColor: '#000000' }
+              { backgroundColor: '#1C1C1E' }
             ]}>
               {menuItems.map((item, index) => (
                 <TouchableOpacity
                   key={`menu-item-${item.id}-${index}`}
-                  style={styles.menuItem}
+                  style={[
+                    styles.menuItem,
+                    index > 0 && styles.menuItemBorder
+                  ]}
                   onPress={() => handleMenuItemPress(item.id)}
                 >
-                  <Ionicons 
-                    name={item.icon} 
-                    size={20} 
-                    color={isDark ? '#FFFFFF' : '#000000'} 
-                    style={styles.menuItemIcon}
-                  />
                   <ThemedText style={styles.menuItemText}>
                     {item.label}
                   </ThemedText>
@@ -1167,13 +1436,6 @@ export default function PhoneScreen() {
                     { color: activeTab === 'missed' ? '#007AFF' : '#999999' }
                   ]}>未接通话</Text>
                 </TouchableOpacity>
-                
-                {/* 添加最后同步时间显示 */}
-                {lastSyncTime && (
-                  <Text style={styles.syncTimeText}>
-                    {`${lastSyncTime.getHours().toString().padStart(2, '0')}:${lastSyncTime.getMinutes().toString().padStart(2, '0')}`}
-                  </Text>
-                )}
               </View>
             </View>
             
@@ -1186,7 +1448,7 @@ export default function PhoneScreen() {
                   handleCall={handleCall} 
                 />
               )}
-              keyExtractor={item => `call-item-${item.id}-${item.number}`}
+              keyExtractor={(item, index) => `call-item-${item.id}-${index}`}
               style={styles.callList}
               contentContainerStyle={{ 
                 paddingBottom: dialPadVisible ? height * 0.4 + 20 : 100
@@ -1262,7 +1524,7 @@ const styles = StyleSheet.create({
   menuOverlay: {
     position: 'absolute',
     top: 50,
-    right: 10,
+    right: 20,
     zIndex: 1000, // 菜单弹出层位置
   },
   menuBackground: {
@@ -1275,24 +1537,29 @@ const styles = StyleSheet.create({
     height: height, // 菜单背景遮罩
   },
   menuContainer: {
-    minWidth: 150,
-    borderRadius: 10,
+    minWidth: 160,
+    borderRadius: 14,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
-    elevation: 5, // 菜单容器样式
+    elevation: 5,
+    overflow: 'hidden', // 菜单容器样式
   },
   menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12, // 菜单项样式
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    justifyContent: 'center',
+    alignItems: 'center', // 菜单项样式
   },
-  menuItemIcon: {
-    marginRight: 10, // 菜单项图标样式
+  menuItemBorder: {
+    borderTopWidth: 0.5,
+    borderTopColor: '#333333', // 菜单项之间的边框线
   },
   menuItemText: {
-    fontSize: 16, // 菜单项文本样式
+    fontSize: 17,
+    color: '#FFFFFF',
+    textAlign: 'center', // 菜单项文本样式
   },
   tabContainer: {
     borderBottomWidth: 0.5,
@@ -1563,5 +1830,10 @@ const styles = StyleSheet.create({
     color: '#999999',
     marginLeft: 'auto',
     marginRight: 10,
+  },
+  emptyText: {
+    fontSize: 16,
+    color: '#999',
+    textAlign: 'center',
   },
 });

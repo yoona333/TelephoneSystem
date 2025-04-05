@@ -556,6 +556,18 @@ io.on('connection', (socket) => {
     console.log(`收到客户端 ${socket.id} 的pong响应:`, data);
   });
   
+  // 添加客户端同步完成事件监听
+  socket.on('client_sync_complete', (data) => {
+    console.log(`客户端 ${socket.id} 同步完成:`, data);
+    
+    // 将消息广播给其他客户端，促使它们也进行同步
+    socket.broadcast.emit('other_client_synced', {
+      clientId: socket.id,
+      timestamp: Date.now(),
+      message: '其他客户端已同步记录'
+    });
+  });
+  
   socket.on('disconnect', (reason) => {
     console.log('===== 客户端断开连接 =====');
     console.log('客户端已断开连接, ID:', socket.id, '原因:', reason);
@@ -583,6 +595,12 @@ io.on('connection', (socket) => {
     
     // 广播给客户端
     io.emit('call_status', data);
+  });
+  
+  // 连接后立即发送当前记录信息
+  socket.emit('current_records_info', {
+    count: callRecords.length,
+    lastUpdate: new Date().toISOString()
   });
 });
 
@@ -654,48 +672,50 @@ app.get('/keep-alive', (req, res) => {
 // 添加从手机端同步记录的API端点
 app.post('/api/sync-records', (req, res) => {
   try {
-    const { phoneRecords, lastSyncTime = 0 } = req.body;
+    const { records } = req.body;
     
-    console.log(`收到来自手机的同步请求，上次同步时间: ${new Date(parseInt(lastSyncTime)).toISOString()}`);
-    console.log(`收到来自手机的 ${phoneRecords?.length || 0} 条通话记录`);
-    
-    // 获取服务器上次同步后的新记录
-    const newServerRecords = callRecords.filter(r => r.timestamp > parseInt(lastSyncTime));
-    console.log(`服务器有 ${newServerRecords.length} 条新记录需要发送到手机`);
+    console.log(`收到同步请求，客户端发送了 ${records?.length || 0} 条通话记录`);
     
     // 不再严格依赖手机发送的记录，即使手机没有发送记录，也返回服务器记录
-    if (!Array.isArray(phoneRecords) || phoneRecords.length === 0) {
+    if (!Array.isArray(records) || records.length === 0) {
       // 返回合并后的记录给手机
       const mergedRecords = getMergedRecords();
       
       return res.json({ 
         success: true, 
         message: '已返回服务器最新记录',
-        recordCount: mergedRecords.length,
-        records: mergedRecords,
-        syncTime: Date.now()
+        records: mergedRecords
       });
     }
     
     // 记录手机端发送的数据，方便调试
-    console.log(`手机端发送的记录示例: ${JSON.stringify(phoneRecords[0])}`);
+    console.log(`客户端发送的记录示例: ${JSON.stringify(records[0])}`);
     
     // 将手机记录转换为服务器记录格式
-    const convertedRecords = phoneRecords.map(pr => ({
-      id: pr.id || `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      phoneNumber: pr.number,
-      timestamp: new Date(pr.date).getTime() || Date.now(),
-      time: formatTime(new Date(pr.date).getTime() || Date.now()),
-      status: pr.type === 'outgoing' ? '已拨打' : 
-              pr.type === 'incoming' ? '已接听' : 
-              pr.type === 'missed' ? '未接听' : '未知',
+    const convertedRecords = records.map(record => ({
+      id: record.id || `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      phoneNumber: record.number,
+      timestamp: new Date(record.date).getTime() || Date.now(),
+      time: formatTime(new Date(record.date).getTime() || Date.now()),
+      status: record.type === 'outgoing' ? '已拨打' : 
+              record.type === 'incoming' ? '已接听' : 
+              record.type === 'missed' ? '未接听' : '未知',
       // 如果有通话时长，也可以添加
-      duration: pr.duration || null
+      duration: record.duration || null
     }));
     
     // 合并记录，避免重复
     let merged = false;
     convertedRecords.forEach(mobileRecord => {
+      // 首先尝试通过ID找到完全匹配的记录
+      const exactMatch = callRecords.findIndex(sr => sr.id === mobileRecord.id);
+      
+      if (exactMatch !== -1) {
+        // 如果找到完全匹配的ID，跳过这条记录
+        console.log(`跳过完全匹配的记录: ${mobileRecord.id} - ${mobileRecord.phoneNumber}`);
+        return;
+      }
+      
       // 检查是否已存在这个号码的相近时间的记录
       const existingIndex = callRecords.findIndex(sr => 
         sr.phoneNumber === mobileRecord.phoneNumber && 
@@ -706,6 +726,10 @@ app.post('/api/sync-records', (req, res) => {
         // 不存在，添加新记录
         callRecords.unshift(mobileRecord);
         merged = true;
+        
+        // 当添加新记录时，立即广播通知所有客户端
+        io.emit('call_record_update', mobileRecord);
+        console.log(`添加并广播新记录: ${mobileRecord.id} - ${mobileRecord.phoneNumber}`);
       }
     });
     
@@ -722,6 +746,12 @@ app.post('/api/sync-records', (req, res) => {
       // 保存到文件
       saveCallRecords();
       console.log(`合并后共有 ${callRecords.length} 条记录`);
+      
+      // 广播告知所有客户端有新记录
+      io.emit('records_updated', {
+        timestamp: Date.now(),
+        count: callRecords.length
+      });
     }
     
     // 获取合并后的记录
@@ -731,10 +761,19 @@ app.post('/api/sync-records', (req, res) => {
     res.json({
       success: true,
       message: merged ? '记录已合并' : '没有新记录',
-      recordCount: mergedRecords.length,
-      records: mergedRecords,
-      syncTime: Date.now() // 返回当前时间戳作为同步时间点
+      records: mergedRecords
     });
+    
+    // 确保其他客户端也能收到最新记录
+    if (merged) {
+      setTimeout(() => {
+        io.emit('phone_record_update', {
+          type: 'sync_complete',
+          timestamp: Date.now(),
+          recordCount: mergedRecords.length
+        });
+      }, 500);
+    }
   } catch (error) {
     console.error('同步记录失败:', error);
     res.status(500).json({ 
@@ -750,21 +789,22 @@ function getMergedRecords() {
   const validRecords = callRecords.filter(record => 
     record && record.phoneNumber && record.phoneNumber.trim() !== '');
   
-  // 按号码分组并合并记录
-  const phoneNumberMap = new Map();
+  // 按照ID进行唯一标识
+  const uniqueRecordsMap = new Map();
   
   // 先按时间戳降序排序
   const sortedRecords = [...validRecords].sort((a, b) => b.timestamp - a.timestamp);
   
-  // 为每个号码只保留最新的一条记录
+  // 为每个记录使用ID作为唯一标识，如果ID不存在则使用phoneNumber+timestamp
   sortedRecords.forEach(record => {
-    if (!phoneNumberMap.has(record.phoneNumber)) {
-      phoneNumberMap.set(record.phoneNumber, record);
+    const key = record.id || `${record.phoneNumber}-${record.timestamp}`;
+    if (!uniqueRecordsMap.has(key)) {
+      uniqueRecordsMap.set(key, record);
     }
   });
   
-  // 转换为数组并再次按时间戳排序，确保最新的记录在前面
-  return Array.from(phoneNumberMap.values())
+  // 转换为数组并再次按时间戳降序排序
+  return Array.from(uniqueRecordsMap.values())
     .sort((a, b) => b.timestamp - a.timestamp)
     .filter(r => r.phoneNumber && r.phoneNumber.trim() !== '');
 }

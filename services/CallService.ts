@@ -1,7 +1,17 @@
-import io from 'socket.io-client';
+import io, { Socket } from 'socket.io-client';
 import { Platform } from 'react-native';
 import { useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// 定义CallItem接口
+export interface CallItem {
+  id: string;
+  number: string;
+  date: string;
+  duration?: number;
+  type?: string;
+  name?: string;
+}
 
 // 使用环境变量动态选择API地址
 export const API_URL = 'https://telephonesystem.onrender.com'; // 使用线上服务器
@@ -444,51 +454,52 @@ const CallService = {
   },
   
   // 添加手机记录同步方法
-  syncCallRecords: async (phoneRecords: any[]): Promise<boolean> => {
+  syncCallRecords: async (records: CallItem[]): Promise<CallItem[]> => {
     try {
-      // 获取上次同步时间
-      let lastSyncTime = '0';
-      try {
-        lastSyncTime = await AsyncStorage.getItem(LAST_SYNC_TIME_KEY) || '0';
-        console.log('读取上次同步时间:', lastSyncTime ? new Date(parseInt(lastSyncTime)).toISOString() : '从未同步');
-      } catch (e) {
-        console.error('获取上次同步时间失败:', e);
-      }
+      console.log('开始同步通话记录到服务器');
       
-      console.log(`准备同步 ${phoneRecords.length} 条手机记录到服务器，上次同步时间: ${lastSyncTime ? new Date(parseInt(lastSyncTime)).toISOString() : '从未同步'}`);
+      // 确保每个记录都有唯一ID
+      const recordsWithUniqueIds = records.map(record => {
+        if (!record.id || record.id.trim() === '') {
+          return {
+            ...record,
+            id: `${Date.now()}-${Math.floor(Math.random() * 10000)}`
+          };
+        }
+        return record;
+      });
       
       const response = await fetch(`${API_URL}/api/sync-records`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store'
         },
-        body: JSON.stringify({ 
-          phoneRecords,
-          lastSyncTime
-        })
+        body: JSON.stringify({ records: recordsWithUniqueIds }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`服务器响应错误: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('同步完成，服务器返回记录数:', data.records.length);
+      
+      // 确保返回的记录也有唯一ID
+      const serverRecords = data.records.map((record: CallItem) => {
+        if (!record.id || record.id.trim() === '') {
+          return {
+            ...record,
+            id: `${Date.now()}-${Math.floor(Math.random() * 10000)}`
+          };
+        }
+        return record;
       });
       
-      if (!response.ok) {
-        throw new Error(`API错误: ${response.status}`);
-      }
-      
-      const result = await response.json();
-      console.log(`同步完成，服务器共有 ${result.recordCount} 条记录`);
-      
-      // 保存最新的同步时间
-      if (result.syncTime) {
-        try {
-          await AsyncStorage.setItem(LAST_SYNC_TIME_KEY, result.syncTime.toString());
-          console.log('更新同步时间:', new Date(result.syncTime).toISOString());
-        } catch (e) {
-          console.error('保存同步时间失败:', e);
-        }
-      }
-      
-      return true;
+      return serverRecords;
     } catch (error) {
       console.error('同步通话记录失败:', error);
-      return false;
+      throw error;
     }
   },
   
@@ -620,7 +631,41 @@ const CallService = {
       });
     
     return newRecords;
-  }
+  },
+  
+  // 添加清空通话记录方法
+  clearCallRecords: async (): Promise<boolean> => {
+    try {
+      console.log('开始清空服务器通话记录...');
+      
+      const response = await fetch(`${API_URL}/api/clear-history`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`API错误: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      console.log('服务器通话记录已清空:', result);
+      
+      // 重置上次同步时间
+      try {
+        await AsyncStorage.removeItem(LAST_SYNC_TIME_KEY);
+        console.log('已重置上次同步时间');
+      } catch (e) {
+        console.error('重置同步时间失败:', e);
+      }
+      
+      return result.success;
+    } catch (error) {
+      console.error('清空通话记录失败:', error);
+      return false;
+    }
+  },
 };
 
 // 初始化时调用
