@@ -8,6 +8,7 @@ import 'react-native-reanimated';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { TouchableOpacity } from 'react-native';
+import CallService from '@/services/CallService';
 
 import { useColorScheme } from '@/hooks/useColorScheme';
 
@@ -19,6 +20,20 @@ export default function RootLayout() {
   const [loaded] = useFonts({
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
   });
+
+  useEffect(() => {
+    const initServer = async () => {
+      console.log("初始化服务器连接...");
+      try {
+        const success = await CallService.warmupServer();
+        console.log("服务器初始化结果:", success ? "成功" : "未连接");
+      } catch (error) {
+        console.error("服务器初始化错误:", error);
+      }
+    };
+    
+    initServer();
+  }, []);
 
   useEffect(() => {
     if (loaded) {

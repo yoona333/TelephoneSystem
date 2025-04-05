@@ -11,6 +11,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_URL } from '@/services/CallService';
 import { Stack } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
+import { Haptics } from '@/utils/Haptics';
+import { getPhoneLocation } from '@/services/PhoneLocationService';
 // 获取屏幕宽度和高度
 const { width, height } = Dimensions.get('window');
 
@@ -38,22 +40,133 @@ interface CallData {
 // 存储键
 const CALL_HISTORY_STORAGE_KEY = 'call_history';
 
-// 电话号码归属地数据（模拟）
-const getPhoneLocation = (phoneNumber: string) => {
-  if (phoneNumber.startsWith('158')) return '浙江宁波 移动';
-  if (phoneNumber.startsWith('138')) return '浙江杭州 移动';
-  if (phoneNumber.startsWith('139')) return '浙江温州 移动';
-  if (phoneNumber.startsWith('136')) return '浙江金华 移动';
-  if (phoneNumber.startsWith('135')) return '浙江台州 移动';
-  return phoneNumber.length > 6 ? '未知归属地' : '';
-};
-
 // 添加菜单选项类型
 interface MenuItem {
   id: string;
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
 }
+
+// 1. 创建一个单独的CallItem组件
+const CallItemComponent = React.memo(({ item, onPress, handleCall }: { 
+  item: CallItem, 
+  onPress: (item: CallItem) => void,
+  handleCall: (number: string) => void 
+}) => {
+  const [location, setLocation] = useState<string>("");
+  const [operator, setOperator] = useState<string>("");
+  const [isValidNumber, setIsValidNumber] = useState<boolean>(false);
+  const colorScheme = useColorScheme();
+  
+  useEffect(() => {
+    let isMounted = true;
+    
+    // 检查是否是有效的手机号码
+    const isValid = item.number && /^1\d{10}$/.test(item.number);
+    setIsValidNumber(!!isValid);
+    
+    if (isValid) {
+      const fetchLocation = async () => {
+        try {
+          const result = await getPhoneLocation(item.number);
+          
+          if (isMounted) {
+            // 只有当结果不是"未知归属地"时才设置location
+            if (result && result !== "未知归属地" && result !== "未知归属地 未知运营商") {
+              // 分离归属地和运营商
+              const parts = result.split(' ');
+              if (parts.length > 1) {
+                setLocation(parts[0] || "");
+                setOperator(parts[1] || "");
+              } else {
+                setLocation(result);
+              }
+              
+              // 只在首次获取时记录日志，减少重复日志
+              console.log(`使用${result.includes('缓存') ? '缓存的' : ''}归属地: ${result}`);
+            }
+          }
+        } catch (error) {
+          if (isMounted) {
+            // 出错时不显示任何内容
+            setLocation("");
+            setOperator("");
+          }
+        }
+      };
+      
+      fetchLocation();
+    }
+    
+    return () => {
+      isMounted = false;
+    };
+  }, [item.number]);
+  
+  return (
+    <TouchableOpacity 
+      style={styles.callItem}
+      onPress={() => onPress(item)}
+      activeOpacity={0.7}
+    >
+      <View style={{flexDirection: 'row', alignItems: 'center'}}>
+        <Ionicons 
+          name="call-outline" 
+          size={22} 
+          color="#999999"
+          style={{marginRight: 15}}
+        />
+        <View style={{flex: 1}}>
+          <ThemedText style={{fontSize: 18, color: '#FFFFFF', fontWeight: '500'}}>
+            {item.number}
+        </ThemedText>
+          <View style={{flexDirection: 'row', marginTop: 4, alignItems: 'center'}}>
+            {operator ? (
+              <View style={{backgroundColor: '#333', borderRadius: 4, marginRight: 8, paddingHorizontal: 4}}>
+                <Text style={{color: '#FFFFFF', fontSize: 12}}>{operator === "中国移动" ? "移动" : 
+                                                               operator === "中国联通" ? "联通" : 
+                                                               operator === "中国电信" ? "电信" : operator}</Text>
+              </View>
+            ) : null}
+            
+            {/* 显示归属地信息或未知 */}
+            {location ? (
+              <Text style={{color: '#999999', fontSize: 14}}>{location}</Text>
+            ) : (
+              <Text style={{color: '#999999', fontSize: 14}}>{isValidNumber ? "" : "未知"}</Text>
+            )}
+          </View>
+        </View>
+        <Text style={{color: '#999999', fontSize: 14, marginRight: 15}}>
+          {item.date.includes('天前') ? item.date : 
+          item.date.includes('分钟前') ? item.date.replace('今天 ', '') : 
+          item.date.replace(/.*(\d{2}:\d{2})$/, '$1')}
+        </Text>
+        <TouchableOpacity 
+          style={{padding: 5}}
+          onPress={(e) => {
+            e.stopPropagation();
+            // 显示详情
+          }}
+        >
+          <Ionicons name="information-circle-outline" size={24} color="#999999" />
+        </TouchableOpacity>
+      </View>
+    </TouchableOpacity>
+  );
+});
+
+// 添加通话类型图标组件
+const CallTypeIcon = ({ type }: { type: 'outgoing' | 'incoming' | 'missed' }) => {
+  if (type === 'outgoing') {
+    return <Ionicons name="arrow-up-outline" size={12} color="#4CD964" style={{marginRight: 5}} />;
+  } else if (type === 'incoming') {
+    return <Ionicons name="arrow-down-outline" size={12} color="#4CD964" style={{marginRight: 5}} />;
+  } else if (type === 'missed') {
+    return <Ionicons name="close-outline" size={12} color="#FF3B30" style={{marginRight: 5}} />;
+  }
+  return null;
+};
 
 export default function PhoneScreen() {
   const [activeTab, setActiveTab] = useState('all'); // 'all' 或 'missed'
@@ -77,6 +190,19 @@ export default function PhoneScreen() {
 
   // 添加离线模式切换
   const [isOfflineMode, setIsOfflineMode] = useState(false);
+
+  // 添加服务器状态检查
+  const [serverAwake, setServerAwake] = useState(false);
+  const [checkingServer, setCheckingServer] = useState(false);
+
+  // 添加状态存储当前输入号码的归属地
+  const [currentLocation, setCurrentLocation] = useState<string>("");
+
+  // 添加防抖逻辑
+  const [isCallInProgress, setIsCallInProgress] = useState(false);
+
+  // 添加节流函数
+  const throttleFlag = useRef(false);
 
   // 加载通话记录
   useEffect(() => {
@@ -104,20 +230,15 @@ export default function PhoneScreen() {
     }
   };
 
-  // 修改添加通话记录函数，避免重复添加
+  // 修改添加通话记录的逻辑，防止重复添加
   const addCallRecord = (number: string, type: 'outgoing' | 'incoming' | 'missed') => {
-    // 检查是否已经存在相同的记录（在短时间内）
-    const now = new Date();
-    const recentCalls = callHistory.filter(call => 
-      call.number === number && 
-      call.type === type && 
-      new Date(call.date).getTime() > now.getTime() - 10000 // 10秒内的记录视为重复
-    );
-    
-    if (recentCalls.length > 0) {
-      // 已存在最近的相同记录，不再添加
+    // 检查号码是否有效
+    if (!number || number.trim() === '') {
+      console.log('拒绝添加空电话号码记录');
       return;
     }
+    
+    console.log('添加通话记录:', number, type);
     
     const newCall: CallItem = {
       id: Date.now().toString(),
@@ -127,9 +248,56 @@ export default function PhoneScreen() {
       type,
     };
 
-    const updatedHistory = [newCall, ...callHistory];
-    setCallHistory(updatedHistory);
-    saveCallHistory(updatedHistory);
+    // 使用函数式更新确保最新状态
+    setCallHistory(prevHistory => {
+      // 检查是否已经存在相同号码且时间接近的记录（30秒内）
+      const now = new Date();
+      const recentCall = prevHistory.find(call => {
+        // 检查号码是否相同
+        if (call.number !== number) return false;
+        
+        // 检查时间是否在30秒内
+        const callDate = parseDate(call.date);
+        const diffSeconds = Math.abs((now.getTime() - callDate.getTime()) / 1000);
+        return diffSeconds < 30;
+      });
+      
+      // 如果已存在近期记录，不添加新记录
+      if (recentCall) {
+        console.log('跳过添加重复记录:', number);
+        return prevHistory;
+      }
+      
+      // 添加新记录
+      const updatedHistory = [newCall, ...prevHistory];
+      // 保存到AsyncStorage
+      saveCallHistory(updatedHistory).catch(e => 
+        console.error('保存通话记录失败:', e)
+      );
+      return updatedHistory;
+    });
+  };
+
+  // 添加辅助函数解析日期字符串
+  const parseDate = (dateStr: string): Date => {
+    const now = new Date();
+    
+    if (dateStr.includes('分钟前')) {
+      const minutes = parseInt(dateStr.split('分钟前')[0]);
+      return new Date(now.getTime() - minutes * 60 * 1000);
+    } else if (dateStr.includes('今天')) {
+      const timePart = dateStr.split('今天 ')[1];
+      const [hours, minutes] = timePart.split(':').map(Number);
+      const result = new Date(now);
+      result.setHours(hours, minutes, 0, 0);
+      return result;
+    } else if (dateStr.includes('天前')) {
+      const days = parseInt(dateStr.split('天前')[0]);
+      return new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+    }
+    
+    // 默认返回当前时间
+    return now;
   };
 
   // 格式化日期
@@ -148,23 +316,48 @@ export default function PhoneScreen() {
     }
   };
 
-  // 修改通话状态监听器，确保不会丢失之前的通话记录
+  // 完全重写通话记录管理逻辑
   useEffect(() => {
-    const unsubscribe = CallService.addListener((data: CallStatusData) => {
-      console.log('Call status update:', data);
+    // 创建一个全局的已处理通话ID集合，确保每个通话只处理一次
+    const processedCallIds = new Set<string>();
+    
+    const handleCallStatus = (data: any) => {
+      console.log('通话状态更新:', data);
       
-      if (data.status === 'ended' && data.phoneNumber) {
-        // 通话结束时添加记录，不会覆盖现有记录
-        addCallRecord(data.phoneNumber, 'outgoing');
-        setCallActive(false);
-      } else if (data.status === 'ringing' && data.phoneNumber) {
-        // 来电时添加记录
-        addCallRecord(data.phoneNumber, 'incoming');
+      // 只在通话结束时添加记录
+      if (data.status === 'ended' && data.phoneNumber && data.callId) {
+        // 检查这个通话ID是否已经处理过
+        if (processedCallIds.has(data.callId)) {
+          console.log('忽略已处理的通话ID:', data.callId);
+          return;
+        }
+        
+        // 标记为已处理
+        processedCallIds.add(data.callId);
+        
+        // 检查最近30秒内是否已经有相同号码的记录
+        const recentCallExists = callHistory.some(call => 
+          call.number === data.phoneNumber && 
+          isWithinLastSeconds(parseDate(call.date), 30)
+        );
+        
+        if (!recentCallExists) {
+          console.log('添加新通话记录:', data.phoneNumber);
+          addCallRecord(data.phoneNumber, 'outgoing');
+        } else {
+          console.log('跳过添加重复号码记录:', data.phoneNumber);
+        }
       }
-    });
-
-    return () => { unsubscribe(); };
-  }, []); // 移除 callHistory 依赖
+    };
+    
+    // 添加监听器
+    CallService.subscribeToCallStatus(handleCallStatus);
+    
+    // 清理函数
+    return () => {
+      CallService.unsubscribeFromCallStatus(handleCallStatus);
+    };
+  }, [callHistory]); // 依赖callHistory以获取最新状态
 
   // 过滤通话记录
   const filteredCalls = activeTab === 'all' 
@@ -173,7 +366,25 @@ export default function PhoneScreen() {
 
   // 处理按键输入
   const handleKeyPress = (key: string) => {
-    setPhoneNumber(prev => prev + key);
+    if (key === 'call') {
+      // 这里直接调用了handleCall，但没有防止多次快速点击
+      handleCall(phoneNumber);
+      return;
+    }
+    // 添加日志调试
+    console.log('按下键:', key);
+    
+    // 使用函数式更新确保状态正确更新
+    setPhoneNumber(prev => {
+      const newNumber = prev + key;
+      console.log('新号码:', newNumber);
+      return newNumber;
+    });
+    
+    // 添加触觉反馈
+    if (Platform.OS === 'ios') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
   };
 
   // 处理删除按键
@@ -186,20 +397,37 @@ export default function PhoneScreen() {
     setPhoneNumber('');
   };
 
-  // 处理拨打电话
-  const handleCall = async () => {
-    if (!phoneNumber) return;
-    
-    setHeaderVisible(false); // 隐藏导航头部
+  // 修改handleCall函数，改进防抖逻辑
+  const handleCall = async (number: string) => {
+    if (!number || number.trim() === '') {
+      return;
+    }
     
     try {
-      const response = await CallService.makeCall(phoneNumber);
+      // 先更新UI状态
+      setPhoneNumber(number);
+      console.log('开始拨打电话:', number);
+      
+      // 尝试获取归属地信息
+      let locationInfo = "";
+      try {
+        locationInfo = await getPhoneLocation(number);
+      } catch (error) {
+        console.error('获取归属地信息失败:', error);
+      }
+      
+      // 发起通话请求
+      const response = await CallService.initiateCall(number);
+      
       if (response && response.callId) {
+        console.log('拨打成功，callId:', response.callId);
         setCallData(response);
         setCallActive(true);
       }
     } catch (error) {
       console.error('拨打电话失败:', error);
+      // 如果拨打失败，添加未接通记录
+      addCallRecord(number, 'missed');
     }
   };
 
@@ -212,11 +440,6 @@ export default function PhoneScreen() {
     if (callData?.callId) {
       CallService.hangupCall(callData.callId)
         .catch(error => console.error('挂断电话失败:', error));
-    }
-    
-    // 添加到通话记录
-    if (phoneNumber) {
-      addCallRecord(phoneNumber, 'outgoing');
     }
     
     // 重置状态
@@ -290,7 +513,7 @@ export default function PhoneScreen() {
             </Text>
             {phoneNumber.length > 0 && (
               <Text style={styles.phoneLocationText}>
-                {getPhoneLocation(phoneNumber)}
+                {currentLocation || "查询中..."}
               </Text>
             )}
           </View>
@@ -373,7 +596,7 @@ export default function PhoneScreen() {
               
               <TouchableOpacity 
                 style={[styles.callButton, !phoneNumber.length && { opacity: 0.5 }]}
-                onPress={phoneNumber.length > 0 ? handleCall : undefined}
+                onPress={phoneNumber.length > 0 ? () => handleCall(phoneNumber) : undefined}
               >
                 <View style={styles.callButtonInner}>
                   <Ionicons name="call" size={24} color="white" />
@@ -395,39 +618,22 @@ export default function PhoneScreen() {
     );
   };
 
-  // 修改renderCallItem函数以匹配图片风格
-  const renderCallItem = ({ item }: { item: CallItem }) => {
-    const getCallTypeIcon = (type: 'outgoing' | 'incoming' | 'missed') => {
-      switch (type) {
-        case 'outgoing': return 'arrow-up-outline' as const;
-        case 'incoming': return 'arrow-down-outline' as const;
-        case 'missed': return 'close-outline' as const;
-        default: return 'call-outline' as const;
-      }
-    };
-    
-    return (
-      <TouchableOpacity 
-        style={[styles.callItem, { backgroundColor: '#000000' }]}
-        onPress={() => handleCallHistoryPress(item)}
-      >
-        <View style={{flexDirection: 'row', flex: 1, alignItems: 'center'}}>
-          <Ionicons name="call-outline" size={20} color="#999999" style={{marginRight: 12}} />
-          <View style={styles.callInfo}>
-            <ThemedText style={styles.callName}>
-              {item.name || item.number}
-            </ThemedText>
-            <ThemedText style={styles.callSubText}>未知</ThemedText>
-          </View>
-        </View>
-        <View style={{flexDirection: 'row', alignItems: 'center'}}>
-          <ThemedText style={styles.callDate}>{item.date}</ThemedText>
-          <TouchableOpacity style={styles.callInfoButton}>
-            <Ionicons name="information-circle-outline" size={24} color="#999999" />
-          </TouchableOpacity>
-        </View>
-      </TouchableOpacity>
-    );
+  // 2. 修改FlatList的renderItem属性
+  const handleCallItemPress = (item: CallItem) => {
+    setPhoneNumber(item.number);
+    setTimeout(() => {
+      handleCall(item.number);
+    }, 100);
+  };
+
+  // 辅助函数：获取通话类型图标
+  const getCallTypeIcon = (type: 'outgoing' | 'incoming' | 'missed') => {
+    switch (type) {
+      case 'outgoing': return 'arrow-up-outline' as const;
+      case 'incoming': return 'arrow-down-outline' as const;
+      case 'missed': return 'close-outline' as const;
+      default: return 'call-outline' as const;
+    }
   };
 
   // 菜单选项
@@ -460,16 +666,14 @@ export default function PhoneScreen() {
         // 处理设置
         break;
       case 'offline':
-        // 处理离线模式切换
         setIsOfflineMode(!isOfflineMode);
-        // 通知CallService切换模式
-        CallService.setOfflineMode(!isOfflineMode);
         break;
     }
   };
 
   // 在 PhoneScreen 组件中添加
   useEffect(() => {
+    
     // 检查服务器连接
     const checkConnection = async () => {
       try {
@@ -510,6 +714,76 @@ export default function PhoneScreen() {
       };
     }, [callActive])
   );
+
+  // 在组件加载时检查服务器状态
+  useEffect(() => {
+    const checkServer = async () => {
+      setCheckingServer(true);
+      try {
+        const response = await fetch(`${API_URL}/api/status`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        setServerAwake(response.ok);
+      } catch (error) {
+        console.log('服务器可能在睡眠中');
+        setServerAwake(false);
+      } finally {
+        setCheckingServer(false);
+      }
+    };
+    
+    checkServer();
+  }, []);
+
+  // 检查电话号码归属地查询正常工作
+  useEffect(() => {
+    const testPhoneLocation = async () => {
+      try {
+        const location = await getPhoneLocation('13800138000');
+        console.log('测试电话号码归属地:', location);
+      } catch (error) {
+        console.error('测试归属地查询失败:', error);
+      }
+    };
+    
+    testPhoneLocation();
+  }, []);
+
+  // 在电话键盘输入号码时显示归属地
+  useEffect(() => {
+    let isMounted = true;
+    
+    const updatePhoneLocation = async () => {
+      if (phoneNumber.length >= 7) {
+        setCurrentLocation(""); // 不显示"查询中..."
+        try {
+          const location = await getPhoneLocation(phoneNumber);
+          if (isMounted) {
+            setCurrentLocation(location);
+          }
+        } catch (error) {
+          if (isMounted) {
+            setCurrentLocation(""); // 出错时不显示任何内容
+          }
+        }
+      } else {
+        setCurrentLocation("");
+      }
+    };
+    
+    updatePhoneLocation();
+    
+    return () => {
+      isMounted = false;
+    };
+  }, [phoneNumber]);
+
+  // 辅助函数检查时间是否在指定秒数内
+  const isWithinLastSeconds = (date: Date, seconds: number): boolean => {
+    const now = new Date();
+    return (now.getTime() - date.getTime()) / 1000 < seconds;
+  };
 
   return (
     <>
@@ -556,7 +830,7 @@ export default function PhoneScreen() {
                   />
                   <ThemedText style={styles.menuItemText}>
                     {item.label}
-                  </ThemedText>
+        </ThemedText>
                 </TouchableOpacity>
               ))}
             </View>
@@ -565,35 +839,44 @@ export default function PhoneScreen() {
         
         {(!dialPadVisible || (dialPadVisible && phoneNumber.length === 0)) && (
           <>
-            <View style={[
-              styles.tabContainer, 
-              { borderBottomColor: '#333333' }
-            ]}>
+            <View style={styles.tabContainer}>
               <View style={styles.tabWrapper}>
-                <TouchableOpacity 
-                  style={[styles.tab, activeTab === 'all' && styles.activeTab]}
+                <TouchableOpacity
+                  style={[
+                    styles.tab,
+                    activeTab === 'all' && styles.activeTab
+                  ]}
                   onPress={() => setActiveTab('all')}
                 >
-                  <ThemedText style={[
+                  <Text style={[
                     styles.tabText,
-                    activeTab === 'all' && { color: '#007AFF' }
-                  ]}>全部通话</ThemedText>
+                    { color: activeTab === 'all' ? '#007AFF' : '#999999' }
+                  ]}>全部通话</Text>
                 </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[styles.tab, activeTab === 'missed' && styles.activeTab]}
+                <TouchableOpacity
+                  style={[
+                    styles.tab,
+                    activeTab === 'missed' && styles.activeTab
+                  ]}
                   onPress={() => setActiveTab('missed')}
                 >
-                  <ThemedText style={[
+                  <Text style={[
                     styles.tabText,
-                    activeTab === 'missed' && { color: '#007AFF' }
-                  ]}>未接通话</ThemedText>
+                    { color: activeTab === 'missed' ? '#007AFF' : '#999999' }
+                  ]}>未接通话</Text>
                 </TouchableOpacity>
               </View>
             </View>
             
             <FlatList
               data={filteredCalls}
-              renderItem={renderCallItem}
+              renderItem={({ item }) => (
+                <CallItemComponent 
+                  item={item} 
+                  onPress={handleCallItemPress} 
+                  handleCall={handleCall} 
+                />
+              )}
               keyExtractor={item => item.id}
               style={styles.callList}
               contentContainerStyle={{ 
@@ -631,6 +914,15 @@ export default function PhoneScreen() {
             onHangup={handleHangup}
           />
         </Modal>
+        
+        {/* 在UI中显示状态 */}
+        {!serverAwake && (
+          <View style={styles.serverSleepingBanner}>
+            <Text style={styles.serverSleepingText}>
+              {checkingServer ? '正在连接服务器...' : '服务器正在唤醒中，首次连接可能较慢'}
+            </Text>
+          </View>
+        )}
       </ThemedView>
     </>
   );
@@ -696,45 +988,40 @@ const styles = StyleSheet.create({
   tabContainer: {
     borderBottomWidth: 0.5,
     borderBottomColor: '#333333',
-    marginTop: 0,
-    marginBottom: 0,
-    paddingHorizontal: 20,
-    backgroundColor: '#000000',
+    alignItems: 'center',
   },
   tabWrapper: {
     flexDirection: 'row',
-    height: 40,
-    justifyContent: 'center', // 添加居中
-    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
   },
   tab: {
-    paddingVertical: 10, // 稍微减少垂直内边距
-    paddingHorizontal: 20,
-    alignItems: 'center',
-    justifyContent: 'center', // 确保内容居中
+    paddingVertical: 15,
+    marginRight: 20,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
   },
   activeTab: {
-    borderBottomWidth: 2,
-    borderBottomColor: '#007AFF', // 激活标签样式
+    borderBottomColor: '#007AFF',
   },
   tabText: {
     fontSize: 16,
-    color: '#FFFFFF',
+    fontWeight: '500',
   },
   callList: {
     flex: 1, // 通话记录列表容器
   },
   callItem: {
-    flexDirection: 'row',
-    padding: 15,
+    paddingVertical: 15,
+    paddingHorizontal: 20,
     borderBottomWidth: 0.5,
     borderBottomColor: '#333333',
-    alignItems: 'center',
-    justifyContent: 'space-between', // 通话记录项样式
     backgroundColor: '#000000',
   },
   callInfo: {
-    flex: 1, // 通话信息容器
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
   },
   callName: {
     fontSize: 16,
@@ -903,5 +1190,59 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: '#000000',
     margin: 1, // 单个点样式
+  },
+  serverSleepingBanner: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    padding: 10,
+    zIndex: 1000,
+  },
+  serverSleepingText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  iconContainer: {
+    width: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  callDetails: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  callTime: {
+    fontSize: 12,
+    color: 'gray',
+    marginLeft: 5,
+  },
+  dialPadHeader: {
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  dialPadNumberText: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: 'white',
+  },
+  nameContainer: {
+    flex: 1,
+  },
+  callLocation: {
+    fontSize: 14,
+    color: '#999999',
+    marginTop: 4,
+  },
+  callActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  callAction: {
+    padding: 10,
   },
 });

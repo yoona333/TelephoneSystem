@@ -3,264 +3,651 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>通话管理系统</title>
+    <title>电话系统控制台</title>
     <style>
         body {
-            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            font-family: 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
             margin: 0;
-            padding: 0;
-            background-color: #000;
-            color: #fff;
+            padding: 20px;
+            background-color: #f5f5f5;
         }
         .container {
-            max-width: 1200px;
+            max-width: 800px;
             margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             padding: 20px;
         }
         h1 {
-            text-align: center;
-            margin-bottom: 40px;
+            color: #333;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
         }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 20px;
-        }
-        th, td {
-            padding: 15px;
-            text-align: left;
-            border-bottom: 1px solid #333;
-        }
-        th {
-            background-color: #000;
-            color: #fff;
-        }
-        .btn {
-            padding: 8px 16px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: bold;
-        }
-        .btn-answer {
-            background-color: #007bff;
-            color: white;
-        }
-        .btn-hangup {
-            background-color: #dc3545;
-            color: white;
-        }
-        .clear-btn {
-            background-color: #dc3545;
-            color: white;
-            padding: 8px 16px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            float: right;
+        .call-container {
             margin-bottom: 20px;
         }
-        #no-calls {
-            text-align: center;
-            margin-top: 50px;
+        .call-item {
+            background-color: #f9f9f9;
+            border-left: 4px solid #4CAF50;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+        }
+        .call-item.ended {
+            border-left-color: #F44336;
+        }
+        .call-item.missed {
+            border-left-color: #FF9800;
+        }
+        .call-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        .call-number {
+            font-size: 18px;
+            font-weight: bold;
+        }
+        .call-time {
             color: #666;
+        }
+        .call-status {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            color: white;
+            background-color: #4CAF50;
+        }
+        .call-status.ended {
+            background-color: #F44336;
+        }
+        .call-status.missed {
+            background-color: #FF9800;
+        }
+        .call-actions {
+            margin-top: 10px;
+        }
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+            font-weight: bold;
+        }
+        .answer-btn {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .hangup-btn {
+            background-color: #F44336;
+            color: white;
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #ddd;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+        }
+        .tab.active {
+            border-bottom: 2px solid #4CAF50;
+            font-weight: bold;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+        .history-section {
+            margin-top: 30px;
+            border-top: 1px solid #eee;
+            padding-top: 20px;
+        }
+        .history-title {
+            font-size: 18px;
+            margin-bottom: 15px;
+            color: #333;
+            font-weight: bold;
+        }
+        .call-item .call-duration {
+            margin-left: 10px;
+            color: #666;
+        }
+        .export-btn {
+            background-color: #2196F3;
+            color: white;
+            float: right;
+        }
+        .sync-btn {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+        .call-details {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 5px;
+            color: #666;
+        }
+        .call-duration {
+            font-weight: bold;
+        }
+        .call-info {
+            margin: 8px 0;
+            font-size: 14px;
+            color: #666;
+        }
+        .call-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .active {
+            border-left: 4px solid #4CAF50;
+        }
+        .ringing {
+            border-left: 4px solid #FFC107;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>通话管理系统</h1>
+        <h1>电话系统控制台</h1>
         
-        <button id="clearBtn" class="clear-btn">清空</button>
+        <div class="tabs">
+            <div class="tab active" id="active-tab">当前通话</div>
+            <div class="tab" id="history-tab">通话历史</div>
+        </div>
         
-        <table id="callTable">
-            <thead>
-                <tr>
-                    <th>#</th>
-                    <th>电话</th>
-                    <th>时间</th>
-                    <th>操作</th>
-                </tr>
-            </thead>
-            <tbody id="callTableBody">
-                <!-- 通话记录将在这里动态添加 -->
-            </tbody>
-        </table>
+        <div id="active-calls" class="call-container">
+            <div class="empty-state">暂无活跃通话</div>
+        </div>
         
-        <div id="no-calls" style="display: none;">暂无通话记录</div>
+        <div id="call-history" class="call-container" style="display: none;">
+            <div class="empty-state">正在加载通话历史...</div>
+        </div>
+        
+        <div class="history-section">
+            <div class="history-title">
+                最近通话记录
+                <button class="export-btn" onclick="exportCallHistory()">导出记录</button>
+                <button class="sync-btn" onclick="syncCallHistoryFromMobile()">同步手机记录</button>
+            </div>
+            <div id="recent-history" class="call-container">
+                <div class="empty-state">正在加载最近通话...</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>通话历史</h2>
+        <div id="callHistoryContainer" class="call-container">
+            <div class="empty-state">加载通话历史...</div>
+        </div>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
-        // 连接到Socket.io服务器
+        // 连接Socket.io
         const socket = io();
         
         // 获取DOM元素
-        const callTableBody = document.getElementById('callTableBody');
-        const noCallsMessage = document.getElementById('no-calls');
-        const clearBtn = document.getElementById('clearBtn');
+        const activeCallsContainer = document.getElementById('active-calls');
+        const callHistoryContainer = document.getElementById('call-history');
+        const recentHistoryContainer = document.getElementById('recent-history');
+        const activeTab = document.getElementById('active-tab');
+        const historyTab = document.getElementById('history-tab');
         
-        // 存储活跃通话
-        let activeCalls = [];
+        // 活跃通话Map
+        const activeCalls = new Map();
         
-        // 监听新的通话状态
-        socket.on('call_status', function(data) {
-            console.log('收到通话状态更新:', data);
-            
-            // 查找是否已存在该通话
-            const existingCallIndex = activeCalls.findIndex(call => call.callId === data.callId);
-            
-            if (data.status === 'ringing') {
-                // 新来电
-                if (existingCallIndex === -1) {
-                    const newCall = {
-                        callId: data.callId,
-                        phoneNumber: data.phoneNumber,
-                        status: data.status,
-                        time: formatTime(new Date())
-                    };
-                    activeCalls.push(newCall);
-                }
-            } else if (data.status === 'active') {
-                // 通话已接通
-                if (existingCallIndex !== -1) {
-                    activeCalls[existingCallIndex].status = 'active';
-                }
-            } else if (data.status === 'ended') {
-                // 通话已结束
-                if (existingCallIndex !== -1) {
-                    // 从活跃通话中移除
-                    activeCalls.splice(existingCallIndex, 1);
-                }
+        // 添加事件去重逻辑
+        const processedEvents = new Set();
+        
+        // 在页面加载时获取活跃通话
+        async function loadActiveCalls() {
+            try {
+                const response = await fetch('/api/calls');
+                const calls = await response.json();
+                
+                // 清空当前活跃通话
+                activeCalls.clear();
+                
+                // 按时间降序排列（最新的在最上面）
+                calls.sort((a, b) => {
+                    return new Date(b.startTime) - new Date(a.startTime);
+                });
+                
+                // 添加到活跃通话Map
+                calls.forEach(call => {
+                    activeCalls.set(call.callId, call);
+                });
+                
+                // 更新UI
+                updateActiveCallsUI();
+            } catch (error) {
+                console.error('加载活跃通话失败:', error);
             }
+        }
+        
+        // 页面加载时立即执行这些操作
+        document.addEventListener('DOMContentLoaded', () => {
+            // 获取活跃通话
+            loadActiveCalls();
             
-            // 更新UI
-            updateCallTable();
+            // 获取最近通话历史
+            loadRecentCallHistory();
+            
+            // 获取完整通话历史
+            loadCallHistory();
+            
+            // 启动定时刷新
+            setInterval(() => {
+                loadActiveCalls();
+                loadRecentCallHistory();
+            }, 10000); // 每10秒刷新一次
         });
         
-        // 更新通话表格
-        function updateCallTable() {
-            // 清空表格
-            callTableBody.innerHTML = '';
-            
-            if (activeCalls.length === 0) {
-                noCallsMessage.style.display = 'block';
+        // 修改更新UI函数，按最新时间排序
+        function updateActiveCallsUI() {
+            if (activeCalls.size === 0) {
+                activeCallsContainer.innerHTML = '<div class="empty-state">暂无活跃通话</div>';
                 return;
             }
             
-            noCallsMessage.style.display = 'none';
+            // 转换为数组并按时间排序
+            const callsArray = Array.from(activeCalls.values());
+            callsArray.sort((a, b) => {
+                return new Date(b.startTime) - new Date(a.startTime); // 降序排列，最新的在前面
+            });
             
-            // 添加每个通话记录
-            activeCalls.forEach((call, index) => {
-                const row = document.createElement('tr');
+            let html = '';
+            callsArray.forEach(call => {
+                const isActive = call.status === 'active';
                 
-                // 序号列
-                const indexCell = document.createElement('td');
-                indexCell.textContent = index + 1;
-                row.appendChild(indexCell);
+                html += `
+                    <div class="call-item ${isActive ? 'active' : 'ringing'}">
+                        <div class="call-header">
+                            <span class="call-number">${call.phoneNumber || '未知号码'}</span>
+                            <span class="call-status">${isActive ? '通话中' : '振铃中'}</span>
+                        </div>
+                        <div class="call-actions">
+                            ${!isActive ? `
+                                <button class="answer-btn" onclick="answerCall('${call.callId}')">接通</button>
+                            ` : ''}
+                            <button class="hangup-btn" onclick="hangupCall('${call.callId}')">挂断</button>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            activeCallsContainer.innerHTML = html;
+        }
+        
+        // 修改通话历史加载函数，确保按最新时间排序
+        async function loadRecentCallHistory() {
+            try {
+                const response = await fetch('/api/call-records');
+                let records = await response.json();
                 
-                // 电话号码列
-                const phoneCell = document.createElement('td');
-                phoneCell.textContent = call.phoneNumber;
-                row.appendChild(phoneCell);
-                
-                // 时间列
-                const timeCell = document.createElement('td');
-                timeCell.textContent = call.time;
-                row.appendChild(timeCell);
-                
-                // 操作列
-                const actionCell = document.createElement('td');
-                
-                // 接通按钮
-                const answerBtn = document.createElement('button');
-                answerBtn.textContent = '接通';
-                answerBtn.className = 'btn btn-answer';
-                answerBtn.style.marginRight = '10px';
-                answerBtn.onclick = function() {
-                    answerCall(call.callId);
-                };
-                
-                // 挂断按钮
-                const hangupBtn = document.createElement('button');
-                hangupBtn.textContent = '挂断';
-                hangupBtn.className = 'btn btn-hangup';
-                hangupBtn.onclick = function() {
-                    hangupCall(call.callId);
-                };
-                
-                // 根据通话状态禁用按钮
-                if (call.status === 'active') {
-                    answerBtn.disabled = true;
-                    answerBtn.style.opacity = '0.5';
+                if (records.length === 0) {
+                    recentHistoryContainer.innerHTML = '<div class="empty-state">暂无通话记录</div>';
+                    return;
                 }
                 
-                actionCell.appendChild(answerBtn);
-                actionCell.appendChild(hangupBtn);
-                row.appendChild(actionCell);
+                // 按时间戳降序排列
+                records.sort((a, b) => b.timestamp - a.timestamp);
                 
-                callTableBody.appendChild(row);
-            });
+                // 显示所有记录，不再限制只显示5条
+                let html = '';
+                records.forEach(record => {
+                    const durationText = record.duration ? ` (${record.duration.toFixed(1)}秒)` : '';
+                    
+                    html += `
+                        <div class="call-item">
+                            <div class="call-header">
+                                <span class="call-number">${record.phoneNumber}</span>
+                                <span class="call-time">${record.time}</span>
+                            </div>
+                            <div>
+                                <span class="call-status">${record.status}</span>
+                                ${record.duration ? `<span class="call-duration">${formatDuration(record.duration)}</span>` : ''}
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                recentHistoryContainer.innerHTML = html;
+            } catch (error) {
+                console.error('加载通话记录失败:', error);
+                recentHistoryContainer.innerHTML = '<div class="empty-state">加载失败</div>';
+            }
+        }
+        
+        // 导出通话历史为CSV
+        function exportCallHistory() {
+            fetch('/api/call-history')
+                .then(response => response.json())
+                .then(history => {
+                    if (history.length === 0) {
+                        alert('没有通话记录可导出');
+                        return;
+                    }
+                    
+                    // 创建CSV内容
+                    let csvContent = "数据类型,电话号码,开始时间,结束时间,状态,时长(秒)\n";
+                    history.forEach(call => {
+                        csvContent += `通话记录,${call.phoneNumber || '未知'},${call.startTime},${call.endTime || ''},${call.status},${call.duration || 0}\n`;
+                    });
+                    
+                    // 创建下载链接
+                    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement("a");
+                    link.setAttribute("href", url);
+                    link.setAttribute("download", "通话记录.csv");
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                })
+                .catch(error => {
+                    console.error('导出通话历史失败:', error);
+                    alert('导出失败: ' + error.message);
+                });
+        }
+        
+        // 修改事件监听函数
+        socket.on('call_status', (data) => {
+            console.log('收到通话状态更新:', data);
+            
+            // 创建事件唯一标识
+            const eventKey = `${data.callId}-${data.status}-${Date.now()}`;
+            
+            // 检查是否处理过类似事件
+            const similarEventPrefix = `${data.callId}-${data.status}`;
+            for (const key of processedEvents) {
+                if (key.startsWith(similarEventPrefix) && Date.now() - parseInt(key.split('-')[2]) < 3000) {
+                    console.log(`跳过重复事件处理: ${similarEventPrefix}`);
+                    return; // 短时间内已处理过类似事件，跳过
+                }
+            }
+            
+            // 记录事件
+            processedEvents.add(eventKey);
+            setTimeout(() => processedEvents.delete(eventKey), 5000);
+            
+            // 正常处理事件
+            if (data.status === 'ringing') {
+                // 新来电 - 确保不重复添加
+                if (!activeCalls.has(data.callId)) {
+                    // 删除所有相同号码的现有活跃通话
+                    for (const [id, call] of activeCalls.entries()) {
+                        if (call.phoneNumber === data.phoneNumber) {
+                            console.log(`发现相同号码通话，移除旧记录: ${id}`);
+                            activeCalls.delete(id);
+                        }
+                    }
+                    
+                    // 添加新通话
+                    activeCalls.set(data.callId, {
+                        ...data,
+                        startTime: data.startTime || new Date().toISOString()
+                    });
+                    
+                    // 更新UI
+                    updateActiveCallsUI();
+                    loadRecentCallHistory();
+                }
+            } 
+            else if (data.status === 'active') {
+                // 更新通话状态
+                if (activeCalls.has(data.callId)) {
+                    const call = activeCalls.get(data.callId);
+                    call.status = 'active';
+                    call.answerTime = data.answerTime || new Date().toISOString();
+                    updateActiveCallsUI();
+                }
+            } 
+            else if (data.status === 'ended') {
+                // 移除通话
+                activeCalls.delete(data.callId);
+                updateActiveCallsUI();
+                setTimeout(loadRecentCallHistory, 500);
+            }
+        });
+        
+        // 切换标签
+        activeTab.addEventListener('click', () => {
+            activeTab.classList.add('active');
+            historyTab.classList.remove('active');
+            activeCallsContainer.style.display = 'block';
+            callHistoryContainer.style.display = 'none';
+        });
+        
+        historyTab.addEventListener('click', () => {
+            historyTab.classList.add('active');
+            activeTab.classList.remove('active');
+            callHistoryContainer.style.display = 'block';
+            activeCallsContainer.style.display = 'none';
+            
+            // 加载通话历史
+            loadCallHistory();
+        });
+        
+        // 加载所有通话历史并去重
+        async function loadCallHistory() {
+            try {
+                const response = await fetch('/api/call-history');
+                let history = await response.json();
+                
+                if (history.length === 0) {
+                    callHistoryContainer.innerHTML = '<div class="empty-state">暂无通话历史</div>';
+                    return;
+                }
+                
+                // 按时间倒序排列，优先使用endTime，确保最新的通话在最上面
+                history.sort((a, b) => {
+                    const timeA = a.endTime ? new Date(a.endTime) : new Date(a.startTime);
+                    const timeB = b.endTime ? new Date(b.endTime) : new Date(b.startTime);
+                    return timeB - timeA; // 降序排列
+                });
+                
+                // 去除重复记录
+                const uniqueHistory = [];
+                const seenPhoneNumbers = new Set();
+                
+                for (const call of history) {
+                    if (!call.phoneNumber || seenPhoneNumbers.has(call.phoneNumber)) {
+                        continue;
+                    }
+                    seenPhoneNumbers.add(call.phoneNumber);
+                    uniqueHistory.push(call);
+                }
+                
+                let html = '';
+                uniqueHistory.forEach(call => {
+                    const callTime = new Date(call.startTime);
+                    const formattedTime = callTime.toLocaleString('zh-CN');
+                    
+                    let statusClass = '';
+                    let statusText = '';
+                    let durationText = '';
+                    
+                    if (call.status === 'ended') {
+                        statusClass = 'ended';
+                        statusText = '已结束';
+                        if (call.duration) {
+                            const minutes = Math.floor(call.duration / 60);
+                            const seconds = call.duration % 60;
+                            durationText = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                        }
+                    } else if (call.status === 'active') {
+                        statusClass = 'active';
+                        statusText = '通话中';
+                    } else if (call.status === 'ringing') {
+                        statusClass = 'missed';
+                        statusText = '未接通';
+                    }
+                    
+                    html += `
+                        <div class="call-item ${statusClass}">
+                            <div class="call-header">
+                                <span class="call-number">${call.phoneNumber || '未知号码'}</span>
+                                <span class="call-status ${statusClass}">${statusText}</span>
+                            </div>
+                            <div class="call-details">
+                                <span class="call-time">${formattedTime}</span>
+                                ${durationText ? `<span class="call-duration">${durationText}</span>` : ''}
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                callHistoryContainer.innerHTML = html;
+            } catch (error) {
+                console.error('加载通话历史失败:', error);
+                callHistoryContainer.innerHTML = '<div class="empty-state">加载通话历史失败</div>';
+            }
+        }
+        
+        // 添加同步功能 - 从手机端获取通话记录
+        async function syncCallHistoryFromMobile() {
+            try {
+                // 这里可以添加从手机端获取通话记录的逻辑
+                // 例如通过WebSocket或API请求
+                console.log('同步手机通话记录');
+                loadCallHistory(); // 重新加载通话记录
+            } catch (error) {
+                console.error('同步通话记录失败:', error);
+            }
+        }
+        
+        // 格式化通话时长
+        function formatDuration(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return `${mins}分${secs}秒`;
         }
         
         // 接通电话
-        function answerCall(callId) {
-            fetch('/api/answer', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ callId })
-            })
-            .then(response => response.json())
-            .then(data => {
-                console.log('接通电话响应:', data);
-            })
-            .catch(error => {
-                console.error('接通电话失败:', error);
-            });
+        async function answerCall(callId) {
+            try {
+                const response = await fetch('/api/answer', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ callId })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('接通电话失败');
+                }
+                
+                console.log('电话已接通');
+                
+                // 更新本地状态
+                const call = activeCalls.get(callId);
+                if (call) {
+                    call.status = 'active';
+                    call.answerTime = new Date().toISOString();
+                }
+                
+                // 立即更新UI
+                updateActiveCallsUI();
+            } catch (error) {
+                console.error('接通电话错误:', error);
+                alert('接通电话失败: ' + error.message);
+            }
         }
         
         // 挂断电话
-        function hangupCall(callId) {
-            fetch('/api/hangup', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ callId })
-            })
-            .then(response => response.json())
-            .then(data => {
-                console.log('挂断电话响应:', data);
-            })
-            .catch(error => {
-                console.error('挂断电话失败:', error);
-            });
+        async function hangupCall(callId) {
+            try {
+                const response = await fetch('/api/hangup', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ callId })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('挂断电话失败');
+                }
+                
+                console.log('电话已挂断');
+            } catch (error) {
+                console.error('挂断电话错误:', error);
+                alert('挂断电话失败: ' + error.message);
+            }
+        }
+
+        // 添加强制刷新按钮
+        document.querySelector('.container').insertAdjacentHTML('afterbegin', `
+            <button onclick="forceRefresh()" style="margin-bottom: 10px; background-color: #4CAF50; color: white; padding: 8px 16px; border: none; border-radius: 4px;">
+                强制刷新记录
+            </button>
+        `);
+        
+        // 强制刷新函数
+        async function forceRefresh() {
+            console.log("强制刷新通话记录");
+            try {
+                // 清除可能的缓存
+                const response = await fetch('/api/call-records', {
+                    cache: 'no-cache',
+                    headers: {
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache'
+                    }
+                });
+                const records = await response.json();
+                console.log(`获取到 ${records.length} 条记录`);
+                
+                // 显示获取到的数据
+                let html = '<h3>最新通话记录</h3>';
+                if (records.length === 0) {
+                    html += '<div class="empty-state">暂无通话记录</div>';
+                } else {
+                    records.sort((a, b) => b.timestamp - a.timestamp);
+                    
+                    records.forEach(record => {
+                        html += `
+                            <div class="call-item">
+                                <div class="call-header">
+                                    <span class="call-number">${record.phoneNumber}</span>
+                                    <span class="call-time">${record.time}</span>
+                                </div>
+                                <div>
+                                    <span class="call-status">${record.status}</span>
+                                    ${record.duration ? `<span class="call-duration">${formatDuration(record.duration)}</span>` : ''}
+                                </div>
+                            </div>
+                        `;
+                    });
+                }
+                
+                document.getElementById('recentHistoryContainer').innerHTML = html;
+            } catch (error) {
+                console.error('刷新失败:', error);
+                alert('刷新失败: ' + error.message);
+            }
         }
         
-        // 清空所有通话
-        clearBtn.addEventListener('click', function() {
-            // 挂断所有活跃通话
-            activeCalls.forEach(call => {
-                hangupCall(call.callId);
-            });
-            
-            // 清空列表
-            activeCalls = [];
-            updateCallTable();
+        // 页面加载时自动刷新一次
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(forceRefresh, 500);
         });
-        
-        // 格式化时间为 HH:MM:SS
-        function formatTime(date) {
-            const hours = date.getHours().toString().padStart(2, '0');
-            const minutes = date.getMinutes().toString().padStart(2, '0');
-            const seconds = date.getSeconds().toString().padStart(2, '0');
-            return `${hours}:${minutes}:${seconds}`;
-        }
-        
-        // 初始化
-        updateCallTable();
     </script>
 </body>
 </html> 
