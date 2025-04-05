@@ -12,93 +12,79 @@
             font-family: 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
             margin: 0;
             padding: 20px;
-            background-color: #f5f5f5;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            padding: 20px;
+            background-color: black;
+            color: white;
         }
         h2 {
-            color: #333;
-            margin-bottom: 20px;
-        }
-        .btn {
-            padding: 8px 16px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            margin-right: 10px;
             color: white;
-            font-weight: bold;
+            text-align: center;
+            margin-bottom: 20px;
+            font-size: 24px;
         }
-        .btn-danger {
-            background-color: #f44336;
-        }
-        .btn-success {
-            background-color: #4CAF50;
-        }
-        .action-btn {
-            padding: 5px 10px;
-            background-color: #4CAF50;
+        .clear-btn {
+            padding: 6px 12px;
+            background-color: #dc3545;
             color: white;
             border: none;
             border-radius: 4px;
             cursor: pointer;
-        }
-        .button-group {
-            margin-bottom: 20px;
+            margin-bottom: 15px;
         }
         table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 20px;
+            margin-top: 15px;
+            color: white;
         }
         th, td {
-            padding: 10px;
+            padding: 8px;
             text-align: left;
-            border-bottom: 1px solid #ddd;
+            border-bottom: 1px solid #555;
         }
-        th {
-            background-color: #f2f2f2;
-            font-weight: bold;
+        tr:hover {
+            background-color: #333;
+        }
+        .action-btn {
+            padding: 5px 10px;
+            background-color: #0d6efd;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 5px;
+        }
+        .hangup-btn {
+            background-color: #dc3545;
         }
         .message {
             padding: 10px;
             text-align: center;
-            color: #666;
+            color: #aaa;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h2>通话管理系统</h2>
-        
-        <div class="button-group">
-            <button class="btn btn-danger" onclick="clearCallHistory()">清空</button>
-            <button class="btn btn-success" onclick="loadCallRecords()">刷新</button>
-        </div>
-        
-        <table>
-            <thead>
-                <tr>
-                    <th>#</th>
-                    <th>电话</th>
-                    <th>时间</th>
-                    <th>操作</th>
-                </tr>
-            </thead>
-            <tbody id="callTableBody">
-                <tr>
-                    <td colspan="4" class="message">加载数据中...</td>
-                </tr>
-            </tbody>
-        </table>
-    </div>
+    <h2>通话管理系统</h2>
+    
+    <button class="clear-btn" onclick="clearCallHistory()">清空</button>
+    
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>电话</th>
+                <th>时间</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody id="callTableBody">
+            <tr>
+                <td colspan="4" class="message">加载数据中...</td>
+            </tr>
+        </tbody>
+    </table>
 
+    <script src="/socket.io/socket.io.js"></script>
     <script>
         // 获取DOM元素
         const callTableBody = document.getElementById('callTableBody');
@@ -138,7 +124,8 @@
                             <td>${record.phoneNumber || '未知号码'}</td>
                             <td>${record.time || new Date(record.timestamp).toLocaleString()}</td>
                             <td>
-                                <button class="action-btn" onclick="handleCall('${record.phoneNumber}')">操作</button>
+                                <button class="action-btn" onclick="answerCall('${record.phoneNumber}')">接通</button>
+                                <button class="action-btn hangup-btn" onclick="hangupCall('${record.phoneNumber}')">挂断</button>
                             </td>
                         </tr>
                     `;
@@ -168,7 +155,6 @@
                 const result = await response.json();
                 
                 if (result.success) {
-                    alert('通话记录已清空');
                     loadCallRecords();
                 } else {
                     alert('清空失败: ' + (result.message || '未知错误'));
@@ -179,35 +165,93 @@
             }
         }
         
-        // 处理通话操作
-        function handleCall(phoneNumber) {
-            alert(`对电话 ${phoneNumber} 执行操作`);
+        // 接通电话
+        async function answerCall(phoneNumber) {
+            try {
+                // 找到对应的通话ID
+                const response = await fetch('/api/calls');
+                const calls = await response.json();
+                
+                const call = calls.find(c => c.phoneNumber === phoneNumber);
+                if (!call) {
+                    alert('找不到该号码的通话');
+                    return;
+                }
+                
+                const answerResponse = await fetch('/api/answer', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ callId: call.callId })
+                });
+                
+                if (answerResponse.ok) {
+                    // 成功接通，刷新列表
+                    setTimeout(loadCallRecords, 500);
+                } else {
+                    alert('接通失败');
+                }
+            } catch (error) {
+                console.error('接通电话失败:', error);
+                alert('接通电话失败: ' + error.message);
+            }
         }
         
-        // 设置socket连接（如果需要）
+        // 挂断电话
+        async function hangupCall(phoneNumber) {
+            try {
+                // 找到对应的通话ID
+                const response = await fetch('/api/calls');
+                const calls = await response.json();
+                
+                const call = calls.find(c => c.phoneNumber === phoneNumber);
+                if (!call) {
+                    alert('找不到该号码的通话');
+                    return;
+                }
+                
+                const hangupResponse = await fetch('/api/hangup', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ callId: call.callId })
+                });
+                
+                if (hangupResponse.ok) {
+                    // 成功挂断，刷新列表
+                    setTimeout(loadCallRecords, 500);
+                } else {
+                    alert('挂断失败');
+                }
+            } catch (error) {
+                console.error('挂断电话失败:', error);
+                alert('挂断电话失败: ' + error.message);
+            }
+        }
+        
+        // 设置socket连接
         let socket;
         try {
-            // 如果页面上有socket.io.js，则使用socket
-            if (typeof io !== 'undefined') {
-                socket = io();
+            socket = io();
+            
+            socket.on('connect', () => {
+                console.log('Socket连接成功');
+            });
+            
+            socket.on('call_status', (data) => {
+                console.log('收到通话状态更新:', data);
                 
-                socket.on('connect', () => {
-                    console.log('Socket连接成功');
-                });
-                
-                socket.on('call_status', (data) => {
-                    console.log('收到通话状态更新:', data);
-                    
-                    // 如果是新通话或通话结束，刷新列表
-                    if (data.status === 'ringing' || data.status === 'ended') {
-                        setTimeout(loadCallRecords, 500);
-                    }
-                });
-                
-                socket.on('connect_error', (error) => {
-                    console.error('Socket连接错误:', error);
-                });
-            }
+                // 如果是新通话或通话结束，刷新列表
+                if (data.status === 'ringing' || data.status === 'ended') {
+                    setTimeout(loadCallRecords, 500);
+                }
+            });
+            
+            socket.on('connect_error', (error) => {
+                console.error('Socket连接错误:', error);
+            });
         } catch (error) {
             console.error('初始化Socket失败:', error);
         }
