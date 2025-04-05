@@ -547,6 +547,84 @@ app.get('/keep-alive', (req, res) => {
   res.send('服务器正常运行中');
 });
 
+// 添加从手机端同步记录的API端点
+app.post('/api/sync-records', (req, res) => {
+  try {
+    const { phoneRecords } = req.body;
+    
+    console.log(`收到来自手机的 ${phoneRecords?.length || 0} 条通话记录`);
+    
+    if (!Array.isArray(phoneRecords) || phoneRecords.length === 0) {
+      return res.json({ 
+        success: true, 
+        message: '没有记录需要同步',
+        recordCount: callRecords.length 
+      });
+    }
+    
+    // 记录手机端发送的数据，方便调试
+    console.log(`手机端发送的记录示例: ${JSON.stringify(phoneRecords[0])}`);
+    
+    // 将手机记录转换为服务器记录格式
+    const convertedRecords = phoneRecords.map(pr => ({
+      id: pr.id || Date.now(),
+      phoneNumber: pr.number,
+      timestamp: new Date(pr.date).getTime() || Date.now(),
+      time: formatTime(new Date(pr.date).getTime() || Date.now()),
+      status: pr.type === 'outgoing' ? '已拨打' : 
+              pr.type === 'incoming' ? '已接听' : 
+              pr.type === 'missed' ? '未接听' : '未知',
+      // 如果有通话时长，也可以添加
+      duration: pr.duration || null
+    }));
+    
+    // 合并记录，避免重复
+    let merged = false;
+    convertedRecords.forEach(mobileRecord => {
+      // 检查是否已存在这个号码的相近时间的记录
+      const existingIndex = callRecords.findIndex(sr => 
+        sr.phoneNumber === mobileRecord.phoneNumber && 
+        Math.abs(sr.timestamp - mobileRecord.timestamp) < 60000 // 1分钟内视为同一通电话
+      );
+      
+      if (existingIndex === -1) {
+        // 不存在，添加新记录
+        callRecords.unshift(mobileRecord);
+        merged = true;
+      }
+    });
+    
+    // 如果有新记录合并，保存到文件
+    if (merged) {
+      // 按时间戳降序排序
+      callRecords.sort((a, b) => b.timestamp - a.timestamp);
+      
+      // 如果记录超过1000条，截取前1000条
+      if (callRecords.length > 1000) {
+        callRecords.splice(1000);
+      }
+      
+      // 保存到文件
+      saveCallRecords();
+      console.log(`合并后共有 ${callRecords.length} 条记录`);
+    }
+    
+    // 向客户端返回所有记录
+    res.json({
+      success: true,
+      message: merged ? '记录已合并' : '没有新记录',
+      recordCount: callRecords.length,
+      records: callRecords
+    });
+  } catch (error) {
+    console.error('同步记录失败:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
 // 修改端口号和监听地址
 const PORT = process.env.PORT || 5000;
 

@@ -207,7 +207,192 @@ export default function PhoneScreen() {
   // 加载通话记录
   useEffect(() => {
     loadCallHistory();
+    
+    // 从服务器加载通话记录并合并
+    const loadServerRecords = async () => {
+      try {
+        console.log('尝试从服务器获取通话记录...');
+        const serverRecords = await CallService.getCallRecords();
+        
+        // 如果获取到记录，合并到本地
+        if (serverRecords && serverRecords.length > 0) {
+          console.log(`从服务器获取了 ${serverRecords.length} 条通话记录`);
+          mergeServerRecords(serverRecords);
+        }
+      } catch (error) {
+        console.error('加载服务器通话记录失败:', error);
+      }
+    };
+    
+    loadServerRecords();
+    
+    // 添加Socket.IO事件监听，实时更新通话记录
+    const handleCallRecordUpdate = (record: any) => {
+      console.log('收到服务器通话记录更新:', record);
+      
+      // 确定记录类型
+      let recordType: 'outgoing' | 'incoming' | 'missed';
+      
+      if (record.status === '已拨打') {
+        recordType = 'outgoing';
+      } else if (record.status === '已接听') {
+        recordType = 'incoming';
+      } else {
+        recordType = 'missed';
+      }
+      
+      // 转换为本地记录格式
+      const localRecord: CallItem = {
+        id: record.id.toString(),
+        name: '',
+        number: record.phoneNumber,
+        date: formatDate(new Date(record.timestamp)),
+        type: recordType
+      };
+      
+      // 添加到本地记录
+      addNewCallRecord(localRecord);
+    };
+    
+    // 订阅通话记录更新
+    CallService.subscribeToCallRecords(handleCallRecordUpdate);
+    
+    // 定期同步记录（每5分钟同步一次）
+    const syncInterval = setInterval(() => {
+      syncRecordsWithServer();
+    }, 5 * 60 * 1000);
+    
+    return () => {
+      clearInterval(syncInterval);
+      // TODO: 取消订阅CallService.unsubscribeFromCallRecords
+    };
   }, []);
+  
+  // 合并服务器记录到本地记录
+  const mergeServerRecords = (serverRecords: any[]) => {
+    // 获取当前本地记录
+    setCallHistory(prevHistory => {
+      // 创建一个映射来检查本地是否已存在相同记录
+      const existingRecords = new Map();
+      prevHistory.forEach(record => {
+        existingRecords.set(record.number + '-' + new Date(record.date).getTime(), record);
+      });
+      
+      // 转换服务器记录到本地格式并过滤掉已存在的
+      const newRecords = serverRecords
+        .filter(sr => {
+          const key = sr.phoneNumber + '-' + sr.timestamp;
+          return !existingRecords.has(key);
+        })
+        .map(sr => {
+          // 确保类型符合CallItem要求
+          let callType: 'outgoing' | 'incoming' | 'missed' = 'outgoing';
+          
+          if (sr.status === '已接听') {
+            callType = 'incoming';
+          } else if (sr.status === '未接听') {
+            callType = 'missed';
+          }
+          
+          return {
+            id: sr.id.toString(),
+            name: '',
+            number: sr.phoneNumber,
+            date: formatDate(new Date(sr.timestamp)),
+            type: callType
+          } as CallItem;
+        });
+      
+      if (newRecords.length > 0) {
+        console.log(`合并 ${newRecords.length} 条新记录到本地`);
+        
+        // 合并并按时间排序
+        const merged = [...prevHistory, ...newRecords].sort((a, b) => {
+          return parseDate(b.date).getTime() - parseDate(a.date).getTime();
+        });
+        
+        // 保存到本地存储
+        saveCallHistory(merged);
+        return merged;
+      }
+      
+      return prevHistory;
+    });
+  };
+  
+  // 添加新的通话记录，避免重复
+  const addNewCallRecord = (record: CallItem) => {
+    setCallHistory(prevHistory => {
+      // 检查是否已存在相同号码和时间（5分钟内）的记录
+      const isDuplicate = prevHistory.some(existing => 
+        existing.number === record.number &&
+        Math.abs(parseDate(existing.date).getTime() - parseDate(record.date).getTime()) < 5 * 60 * 1000
+      );
+      
+      if (isDuplicate) {
+        console.log('跳过添加重复记录:', record.number);
+        return prevHistory;
+      }
+      
+      // 添加新记录并排序
+      const updated = [record, ...prevHistory].sort((a, b) => 
+        parseDate(b.date).getTime() - parseDate(a.date).getTime()
+      );
+      
+      // 保存到本地存储
+      saveCallHistory(updated);
+      return updated;
+    });
+  };
+  
+  // 同步本地记录到服务器
+  const syncRecordsWithServer = async () => {
+    try {
+      console.log('开始与服务器同步通话记录...');
+      
+      // 检查是否有网络连接
+      const isConnected = await CallService.checkConnection();
+      if (!isConnected) {
+        console.log('无法连接到服务器，跳过同步');
+        return;
+      }
+      
+      // 获取本地记录并发送到服务器
+      const success = await CallService.syncCallRecords(callHistory);
+      
+      if (success) {
+        console.log('通话记录同步成功');
+        
+        // 获取最新的服务器记录并更新本地
+        const serverRecords = await CallService.getCallRecords();
+        if (serverRecords && serverRecords.length > 0) {
+          mergeServerRecords(serverRecords);
+        }
+      }
+    } catch (error) {
+      console.error('同步通话记录失败:', error);
+    }
+  };
+
+  // 在通话结束后同步记录
+  useEffect(() => {
+    const handleCallStatus = (data: any) => {
+      // 只在通话结束时处理
+      if (data.status === 'ended' && data.phoneNumber) {
+        // 延迟2秒再同步，确保服务器有时间保存记录
+        setTimeout(() => {
+          syncRecordsWithServer();
+        }, 2000);
+      }
+    };
+    
+    // 添加监听器
+    CallService.subscribeToCallStatus(handleCallStatus);
+    
+    return () => {
+      CallService.unsubscribeFromCallStatus(handleCallStatus);
+    };
+  }, [callHistory]);
 
   // 从 AsyncStorage 加载通话记录
   const loadCallHistory = async () => {
@@ -268,12 +453,22 @@ export default function PhoneScreen() {
         return prevHistory;
       }
       
-      // 添加新记录
-      const updatedHistory = [newCall, ...prevHistory];
+      // 添加新记录并立即排序
+      const updatedHistory = [newCall, ...prevHistory]
+        .sort((a, b) => parseDate(b.date).getTime() - parseDate(a.date).getTime());
+      
       // 保存到AsyncStorage
       saveCallHistory(updatedHistory).catch(e => 
         console.error('保存通话记录失败:', e)
       );
+      
+      // 尝试将记录同步到服务器
+      setTimeout(() => {
+        syncRecordsWithServer().catch(e => 
+          console.error('同步记录到服务器失败:', e)
+        );
+      }, 500);
+      
       return updatedHistory;
     });
   };
