@@ -196,7 +196,7 @@ export default function AdminScreen() {
         
         <ScrollView style={styles.tableBody}>
           {activeCalls.map((call, index) => (
-            <View key={call.callId} style={styles.tableRow}>
+            <View key={`active-call-${call.callId}-${index}`} style={styles.tableRow}>
               <View style={styles.tableCell}>
                 <Text style={styles.cellText}>{call.phoneNumber}</Text>
               </View>
@@ -259,8 +259,8 @@ export default function AdminScreen() {
         </View>
         
         <ScrollView style={styles.tableBody}>
-          {mergedRecords.map((record) => (
-            <View key={record.id} style={styles.tableRow}>
+          {mergedRecords.map((record, index) => (
+            <View key={`merged-record-${record.id}-${index}`} style={styles.tableRow}>
               <View style={styles.tableCell}>
                 <Text style={styles.cellText}>{record.phoneNumber}</Text>
               </View>

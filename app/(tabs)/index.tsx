@@ -792,10 +792,10 @@ export default function PhoneScreen() {
             <View style={styles.keypadWrapper}>
               <View style={styles.keypadContainer}>
                 {keys.map((row, rowIndex) => (
-                  <View key={`row-${rowIndex}`} style={styles.keyRow}>
-                    {row.map(key => (
+                  <View key={`keypad-row-${rowIndex}`} style={styles.keyRow}>
+                    {row.map((key, keyIndex) => (
                       <TouchableOpacity
-                        key={key}
+                        key={`key-${rowIndex}-${keyIndex}-${key}`}
                         style={styles.keyButton}
                         onPress={() => handleKeyPress(key)}
                       >
@@ -1042,9 +1042,9 @@ export default function PhoneScreen() {
               styles.menuContainer,
               { backgroundColor: '#000000' }
             ]}>
-              {menuItems.map((item) => (
+              {menuItems.map((item, index) => (
                 <TouchableOpacity
-                  key={item.id}
+                  key={`menu-item-${item.id}-${index}`}
                   style={styles.menuItem}
                   onPress={() => handleMenuItemPress(item.id)}
                 >
@@ -1056,7 +1056,7 @@ export default function PhoneScreen() {
                   />
                   <ThemedText style={styles.menuItemText}>
                     {item.label}
-        </ThemedText>
+                  </ThemedText>
                 </TouchableOpacity>
               ))}
             </View>
@@ -1103,7 +1103,7 @@ export default function PhoneScreen() {
                   handleCall={handleCall} 
                 />
               )}
-              keyExtractor={item => item.id}
+              keyExtractor={item => `call-item-${item.id}`}
               style={styles.callList}
               contentContainerStyle={{ 
                 paddingBottom: dialPadVisible ? height * 0.4 + 20 : 100
