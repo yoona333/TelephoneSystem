@@ -35,6 +35,17 @@ app.options('*', cors());
 
 app.use(express.json());
 
+// 添加缓存控制中间件，防止浏览器缓存静态文件
+app.use((req, res, next) => {
+  if (req.url === '/' || req.url.endsWith('.html')) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
+  }
+  next();
+});
+
 // 设置静态文件服务
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -523,6 +534,24 @@ io.on('connection', (socket) => {
 app.get('/api/call-records', (req, res) => {
   console.log(`返回 ${callRecords.length} 条通话记录`);
   res.json(callRecords);
+});
+
+// 添加清空通话历史记录API
+app.post('/api/clear-history', (req, res) => {
+  console.log('收到清空通话记录请求');
+  
+  try {
+    // 清空记录数组
+    callRecords.length = 0;
+    
+    // 保存到文件
+    saveCallRecords();
+    
+    res.json({ success: true, message: '通话记录已清空' });
+  } catch (error) {
+    console.error('清空通话记录失败:', error);
+    res.status(500).json({ success: false, message: '清空通话记录失败' });
+  }
 });
 
 // 修复客户端检查记录逻辑
