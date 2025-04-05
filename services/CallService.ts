@@ -1,6 +1,7 @@
 import io from 'socket.io-client';
 import { Platform } from 'react-native';
 import { useEffect } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // 使用环境变量动态选择API地址
 export const API_URL = 'https://telephonesystem.onrender.com'; // 使用线上服务器
@@ -14,6 +15,9 @@ let callStatusListeners: ((data: any) => void)[] = [];
 let activeCallId: string | null = null;
 let activePhoneNumber: string | null = null;
 let pendingCalls: Record<string, boolean> = {};
+
+// 定义同步时间的存储键
+const LAST_SYNC_TIME_KEY = 'LAST_SYNC_TIME';
 
 // 可以增加一个请求防抖函数
 const debounceCall = (() => {
@@ -356,9 +360,18 @@ const CallService = {
   // 添加获取通话记录的方法
   getCallRecords: async (): Promise<any[]> => {
     try {
-      // 打印详细请求URL，便于调试
-      const url = `${API_URL}/api/call-records`;
-      console.log("请求通话记录URL:", url);
+      // 从本地存储获取上次同步时间
+      let lastSyncTime = '0';
+      try {
+        lastSyncTime = await AsyncStorage.getItem(LAST_SYNC_TIME_KEY) || '0';
+        console.log('读取上次同步时间:', lastSyncTime ? new Date(parseInt(lastSyncTime)).toISOString() : '从未同步');
+      } catch (e) {
+        console.error('获取上次同步时间失败:', e);
+      }
+      
+      // 使用新的手机专用API端点
+      const url = `${API_URL}/api/phone-call-records?since=${lastSyncTime}`;
+      console.log("请求手机通话记录URL:", url);
       
       const response = await fetch(url, {
         // 禁用缓存
@@ -374,9 +387,26 @@ const CallService = {
         throw new Error(`API错误: ${response.status}`);
       }
       
-      const records = await response.json();
-      console.log(`获取了 ${records.length} 条通话记录`);
-      return records;
+      const result = await response.json();
+      
+      if (result.success) {
+        console.log(`获取了 ${result.records.length} 条通话记录，其中 ${result.newRecordsCount} 条是新记录`);
+        
+        // 保存同步时间到本地存储
+        try {
+          if (result.syncTime) {
+            await AsyncStorage.setItem(LAST_SYNC_TIME_KEY, result.syncTime.toString());
+            console.log('保存同步时间:', new Date(result.syncTime).toISOString());
+          }
+        } catch (e) {
+          console.error('保存同步时间失败:', e);
+        }
+        
+        return result.records;
+      } else {
+        console.error('API返回错误:', result.error || '未知错误');
+        return [];
+      }
     } catch (error) {
       console.error('获取通话记录失败:', error);
       // 出错时返回空数组而不是抛出异常
@@ -416,13 +446,26 @@ const CallService = {
   // 添加手机记录同步方法
   syncCallRecords: async (phoneRecords: any[]): Promise<boolean> => {
     try {
-      console.log(`准备同步 ${phoneRecords.length} 条手机记录到服务器`);
+      // 获取上次同步时间
+      let lastSyncTime = '0';
+      try {
+        lastSyncTime = await AsyncStorage.getItem(LAST_SYNC_TIME_KEY) || '0';
+        console.log('读取上次同步时间:', lastSyncTime ? new Date(parseInt(lastSyncTime)).toISOString() : '从未同步');
+      } catch (e) {
+        console.error('获取上次同步时间失败:', e);
+      }
+      
+      console.log(`准备同步 ${phoneRecords.length} 条手机记录到服务器，上次同步时间: ${lastSyncTime ? new Date(parseInt(lastSyncTime)).toISOString() : '从未同步'}`);
+      
       const response = await fetch(`${API_URL}/api/sync-records`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ phoneRecords })
+        body: JSON.stringify({ 
+          phoneRecords,
+          lastSyncTime
+        })
       });
       
       if (!response.ok) {
@@ -431,6 +474,17 @@ const CallService = {
       
       const result = await response.json();
       console.log(`同步完成，服务器共有 ${result.recordCount} 条记录`);
+      
+      // 保存最新的同步时间
+      if (result.syncTime) {
+        try {
+          await AsyncStorage.setItem(LAST_SYNC_TIME_KEY, result.syncTime.toString());
+          console.log('更新同步时间:', new Date(result.syncTime).toISOString());
+        } catch (e) {
+          console.error('保存同步时间失败:', e);
+        }
+      }
+      
       return true;
     } catch (error) {
       console.error('同步通话记录失败:', error);

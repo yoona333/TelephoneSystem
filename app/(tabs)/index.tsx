@@ -11,7 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_URL } from '@/services/CallService';
 import { Stack } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
-import { Haptics } from '@/utils/Haptics';
+import { Haptics, ImpactFeedbackStyle } from '@/utils/Haptics';
 import { getPhoneLocation } from '@/services/PhoneLocationService';
 // 获取屏幕宽度和高度
 const { width, height } = Dimensions.get('window');
@@ -179,6 +179,10 @@ export default function PhoneScreen() {
   const isDark = colorScheme === 'dark';
   const [menuVisible, setMenuVisible] = useState(false);
   
+  // 添加同步状态
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  
   // 添加动画值
   const slideAnim = useRef(new Animated.Value(0)).current;
 
@@ -212,12 +216,18 @@ export default function PhoneScreen() {
     const loadServerRecords = async () => {
       try {
         console.log('尝试从服务器获取通话记录...');
+        // 使用新的API端点获取记录
         const serverRecords = await CallService.getCallRecords();
         
         // 如果获取到记录，合并到本地
         if (serverRecords && serverRecords.length > 0) {
           console.log(`从服务器获取了 ${serverRecords.length} 条通话记录`);
           mergeServerRecords(serverRecords);
+          
+          // 明确表示同步成功
+          console.log('通话记录同步成功并合并到本地');
+        } else {
+          console.log('服务器没有返回任何通话记录');
         }
       } catch (error) {
         console.error('加载服务器通话记录失败:', error);
@@ -1011,22 +1021,88 @@ export default function PhoneScreen() {
     return (now.getTime() - date.getTime()) / 1000 < seconds;
   };
 
+  // 手动触发同步
+  const handleManualSync = async () => {
+    if (isSyncing) return; // 避免重复触发
+    
+    try {
+      setIsSyncing(true);
+      console.log('手动触发同步...');
+      
+      // 检查是否有网络连接
+      const isConnected = await CallService.checkConnection();
+      if (!isConnected) {
+        console.log('无法连接到服务器，同步失败');
+        return;
+      }
+      
+      // 获取服务器记录
+      const serverRecords = await CallService.getCallRecords();
+      
+      if (serverRecords && serverRecords.length > 0) {
+        console.log(`从服务器获取了 ${serverRecords.length} 条通话记录`);
+        mergeServerRecords(serverRecords);
+        
+        // 同步本地记录到服务器
+        await CallService.syncCallRecords(callHistory);
+        
+        // 更新最后同步时间
+        setLastSyncTime(new Date());
+        
+        // 触发震动反馈
+        Haptics.impactAsync(ImpactFeedbackStyle.Light);
+        
+        console.log('同步完成');
+      } else {
+        console.log('服务器没有返回任何记录');
+      }
+    } catch (error) {
+      console.error('手动同步失败:', error);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   return (
     <>
-      <Stack.Screen 
-        options={{ 
-          headerShown: headerVisible,
+      <Stack.Screen
+        options={{
+          title: '电话',
           headerStyle: {
-            backgroundColor: '#000000',
+            backgroundColor: isDark ? '#000000' : '#f2f2f7',
           },
           headerTitleStyle: {
-            color: '#FFFFFF',
+            color: isDark ? '#ffffff' : '#000000',
+            fontSize: 20,
+            fontWeight: 'bold',
           },
-          contentStyle: {
-            backgroundColor: '#000000',
-            paddingTop: 0
-          }
-        }} 
+          headerRight: () => (
+            <TouchableOpacity 
+              style={styles.menuButton}
+              onPress={() => setMenuVisible(!menuVisible)}
+              hitSlop={{ top: 15, right: 15, bottom: 15, left: 15 }}
+            >
+              <Ionicons 
+                name="ellipsis-horizontal-circle" 
+                size={22} 
+                color={isDark ? "#FFFFFF" : "#000000"} 
+              />
+            </TouchableOpacity>
+          ),
+          headerLeft: () => (
+            <TouchableOpacity 
+              style={styles.syncButton}
+              onPress={handleManualSync}
+              disabled={isSyncing}
+            >
+              <Ionicons 
+                name={isSyncing ? "sync-circle" : "sync-outline"} 
+                size={22} 
+                color={isDark ? (isSyncing ? "#007AFF" : "#FFFFFF") : (isSyncing ? "#007AFF" : "#000000")} 
+              />
+            </TouchableOpacity>
+          ),
+        }}
       />
       
       <ThemedView style={styles.container}>
@@ -1091,6 +1167,13 @@ export default function PhoneScreen() {
                     { color: activeTab === 'missed' ? '#007AFF' : '#999999' }
                   ]}>未接通话</Text>
                 </TouchableOpacity>
+                
+                {/* 添加最后同步时间显示 */}
+                {lastSyncTime && (
+                  <Text style={styles.syncTimeText}>
+                    {`${lastSyncTime.getHours().toString().padStart(2, '0')}:${lastSyncTime.getMinutes().toString().padStart(2, '0')}`}
+                  </Text>
+                )}
               </View>
             </View>
             
@@ -1103,7 +1186,7 @@ export default function PhoneScreen() {
                   handleCall={handleCall} 
                 />
               )}
-              keyExtractor={item => `call-item-${item.id}`}
+              keyExtractor={item => `call-item-${item.id}-${item.number}`}
               style={styles.callList}
               contentContainerStyle={{ 
                 paddingBottom: dialPadVisible ? height * 0.4 + 20 : 100
@@ -1470,5 +1553,15 @@ const styles = StyleSheet.create({
   },
   callAction: {
     padding: 10,
+  },
+  syncButton: {
+    padding: 10,
+    marginLeft: 10,
+  },
+  syncTimeText: {
+    fontSize: 12,
+    color: '#999999',
+    marginLeft: 'auto',
+    marginRight: 10,
   },
 });
