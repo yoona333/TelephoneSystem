@@ -190,13 +190,58 @@ function formatTime(timestamp) {
 }
 
 // 修改添加通话记录函数
-function addCallRecord(phoneNumber, status, duration = null) {
+function addCallRecord(phoneNumber, status, duration = null, updateOnly = false) {
   // 详细日志
   console.log(`\n=======================================`);
-  console.log(`添加通话记录: ${phoneNumber} | ${status} | ${duration || 'N/A'}`);
+  console.log(`添加通话记录: ${phoneNumber} | ${status} | ${duration || 'N/A'} | updateOnly: ${updateOnly}`);
   
-  // 检查最近30秒内是否有相同的记录 (增加时间窗口并改进检测逻辑)
-  const recentTime = Date.now() - 30000; // 30秒前
+  // 查找是否有现有记录
+  const existingIndex = callRecords.findIndex(record => 
+    record.phoneNumber === phoneNumber &&
+    Math.abs(record.timestamp - Date.now()) < 300000 // 5分钟内的记录
+  );
+  
+  // 如果找到现有记录并且是更新模式
+  if (existingIndex !== -1 && updateOnly) {
+    console.log(`更新现有记录 index ${existingIndex}: ${phoneNumber} | ${status}`);
+    
+    // 更新现有记录
+    const updatedRecord = {
+      ...callRecords[existingIndex],
+      status: status,
+      timestamp: Date.now(),
+      time: formatTime(Date.now())
+    };
+    
+    // 如果有时长，也更新时长
+    if (duration !== null) {
+      updatedRecord.duration = duration;
+    }
+    
+    // 替换记录
+    callRecords[existingIndex] = updatedRecord;
+    
+    // 保存到文件
+    saveCallRecords();
+    
+    // 广播更新
+    io.emit('call_record_update', updatedRecord);
+    
+    console.log(`记录已更新: ${phoneNumber} | ${status}`);
+    console.log(`=======================================\n`);
+    
+    return updatedRecord;
+  }
+  
+  // 如果是更新模式但找不到现有记录，则跳过
+  if (updateOnly && existingIndex === -1) {
+    console.log(`指定为仅更新模式但找不到现有记录，跳过创建`);
+    console.log(`=======================================\n`);
+    return null;
+  }
+  
+  // 检查重复记录
+  const recentTime = Date.now() - 60000; // 60秒前
   const hasDuplicate = callRecords.some(record => 
     record.phoneNumber === phoneNumber && 
     (record.status === status || (status === "已挂断" && record.status === "已接通")) &&
@@ -231,7 +276,7 @@ function addCallRecord(phoneNumber, status, duration = null) {
   // 打印到控制台
   const durationText = duration ? ` (${duration.toFixed(1)}秒)` : '';
   console.log(`========================`);
-  console.log(`通话记录: ${phoneNumber} | ${status}${durationText}`);
+  console.log(`新增通话记录: ${phoneNumber} | ${status}${durationText}`);
   console.log(`========================`);
   
   // 保存记录到文件
@@ -362,8 +407,8 @@ app.post('/api/call', (req, res) => {
 
 // 修改接听逻辑
 app.post('/api/answer', (req, res) => {
-  const { callId } = req.body;
-  console.log(`接听电话请求, callId: ${callId}`);
+  const { callId, updateOnly } = req.body;
+  console.log(`接听电话请求, callId: ${callId}, updateOnly: ${updateOnly}`);
   
   if (!activeCalls.has(callId)) {
     return res.status(404).json({ error: '通话不存在' });
@@ -391,17 +436,17 @@ app.post('/api/answer', (req, res) => {
     command: 'answer'  // 明确指定answer命令
   });
   
-  // 添加"已接通"记录
-  addCallRecord(call.phoneNumber, "已接通");
+  // 添加"已接通"记录，传入updateOnly参数
+  addCallRecord(call.phoneNumber, "已接通", null, updateOnly === true);
   
   res.json({ success: true });
 });
 
 // 修改挂断逻辑
 app.post('/api/hangup', (req, res) => {
-  const { callId } = req.body;
+  const { callId, updateOnly } = req.body;
   console.log(`\n======= 挂断电话请求 =======`);
-  console.log(`CallID: ${callId}`);
+  console.log(`CallID: ${callId}, updateOnly: ${updateOnly}`);
   
   // 即使找不到通话也创建记录（避免状态不同步问题）
   if (!activeCalls.has(callId)) {
@@ -413,7 +458,7 @@ app.post('/api/hangup', (req, res) => {
       console.log(`在历史记录中找到了通话: ${historyCall.phoneNumber}`);
       
       // 添加挂断记录
-      addCallRecord(historyCall.phoneNumber, "已挂断", 0);
+      addCallRecord(historyCall.phoneNumber, "已挂断", 0, updateOnly === true);
       
       // 发送挂断命令
       broadcastCallStatus({ 
@@ -463,7 +508,8 @@ app.post('/api/hangup', (req, res) => {
   activeCalls.delete(callId);
   
   // 添加"已挂断"记录，并确保记录添加成功
-  const record = addCallRecord(call.phoneNumber, "已挂断", duration);
+  // 传入updateOnly参数，表示优先更新而不是创建新记录
+  const record = addCallRecord(call.phoneNumber, "已挂断", duration, updateOnly === true);
   console.log("已添加挂断记录:", JSON.stringify(record));
   
   res.json({ success: true });
@@ -678,11 +724,18 @@ app.get('/api/merged-call-records', (req, res) => {
   try {
     console.log('请求合并后的通话记录');
     
+    // 过滤无效的记录
+    const validRecords = callRecords.filter(record => 
+      record && record.phoneNumber && record.phoneNumber.trim() !== '');
+      
+    // 输出过滤前后的记录数量
+    console.log(`过滤前: ${callRecords.length} 条记录, 过滤后: ${validRecords.length} 条记录`);
+    
     // 按号码分组并合并记录
     const phoneNumberMap = new Map();
     
     // 先按时间戳降序排序
-    const sortedRecords = [...callRecords].sort((a, b) => b.timestamp - a.timestamp);
+    const sortedRecords = [...validRecords].sort((a, b) => b.timestamp - a.timestamp);
     
     // 为每个号码只保留最新的一条记录
     sortedRecords.forEach(record => {
@@ -695,13 +748,20 @@ app.get('/api/merged-call-records', (req, res) => {
     const mergedRecords = Array.from(phoneNumberMap.values())
       .sort((a, b) => b.timestamp - a.timestamp);
     
-    console.log(`返回 ${mergedRecords.length} 条合并后的通话记录，总记录数: ${callRecords.length}`);
+    // 移除空号码记录
+    const finalRecords = mergedRecords.filter(r => r.phoneNumber && r.phoneNumber.trim() !== '');
+    
+    console.log(`返回 ${finalRecords.length} 条合并后的通话记录，总记录数: ${callRecords.length}`);
     
     // 记录所有电话号码，方便调试
-    const phoneNumbers = mergedRecords.map(r => r.phoneNumber);
+    const phoneNumbers = finalRecords.map(r => r.phoneNumber);
     console.log(`返回的号码列表: ${phoneNumbers.join(', ')}`);
     
-    res.json(mergedRecords);
+    // 在响应中包含同步时间戳
+    res.json({
+      records: finalRecords,
+      syncTime: Date.now()
+    });
   } catch (error) {
     console.error('获取合并后通话记录失败:', error);
     res.status(500).json({ error: '获取合并后通话记录失败' });

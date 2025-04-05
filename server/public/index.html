@@ -113,7 +113,10 @@
                         'Cache-Control': 'no-cache'
                     }
                 });
-                const records = await response.json();
+                const result = await response.json();
+                
+                // 适应新的API格式，result包含records数组
+                const records = result.records || result;
                 
                 if (!records || records.length === 0) {
                     callTableBody.innerHTML = '<tr><td colspan="4" class="message">暂无通话记录</td></tr>';
@@ -189,7 +192,10 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ callId: call.callId })
+                    body: JSON.stringify({ 
+                        callId: call.callId,
+                        updateOnly: true // 添加标记，表示只更新不添加新记录
+                    })
                 });
                 
                 if (answerResponse.ok) {
@@ -222,7 +228,10 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ callId: call.callId })
+                    body: JSON.stringify({ 
+                        callId: call.callId,
+                        updateOnly: true // 添加标记，表示只更新不添加新记录
+                    })
                 });
                 
                 if (hangupResponse.ok) {
