@@ -201,6 +201,8 @@ function addCallRecord(phoneNumber, status, duration = null, updateOnly = false)
     Math.abs(record.timestamp - Date.now()) < 300000 // 5分钟内的记录
   );
   
+  let resultRecord = null;
+  
   // 如果找到现有记录并且是更新模式
   if (existingIndex !== -1 && updateOnly) {
     console.log(`更新现有记录 index ${existingIndex}: ${phoneNumber} | ${status}`);
@@ -220,6 +222,7 @@ function addCallRecord(phoneNumber, status, duration = null, updateOnly = false)
     
     // 替换记录
     callRecords[existingIndex] = updatedRecord;
+    resultRecord = updatedRecord;
     
     // 保存到文件
     saveCallRecords();
@@ -228,68 +231,75 @@ function addCallRecord(phoneNumber, status, duration = null, updateOnly = false)
     io.emit('call_record_update', updatedRecord);
     
     console.log(`记录已更新: ${phoneNumber} | ${status}`);
-    console.log(`=======================================\n`);
-    
-    return updatedRecord;
   }
-  
   // 如果是更新模式但找不到现有记录，则跳过
-  if (updateOnly && existingIndex === -1) {
+  else if (updateOnly && existingIndex === -1) {
     console.log(`指定为仅更新模式但找不到现有记录，跳过创建`);
     console.log(`=======================================\n`);
     return null;
   }
-  
-  // 检查重复记录
-  const recentTime = Date.now() - 60000; // 60秒前
-  const hasDuplicate = callRecords.some(record => 
-    record.phoneNumber === phoneNumber && 
-    (record.status === status || (status === "已挂断" && record.status === "已接通")) &&
-    record.timestamp > recentTime
-  );
-  
-  if (hasDuplicate) {
-    console.log(`==================`);
-    console.log(`跳过重复记录: ${phoneNumber} | ${status}`);
-    console.log(`==================`);
-    return null;
+  // 创建新记录
+  else {
+    // 检查重复记录
+    const recentTime = Date.now() - 60000; // 60秒前
+    const hasDuplicate = callRecords.some(record => 
+      record.phoneNumber === phoneNumber && 
+      (record.status === status || (status === "已挂断" && record.status === "已接通")) &&
+      record.timestamp > recentTime
+    );
+    
+    if (hasDuplicate) {
+      console.log(`==================`);
+      console.log(`跳过重复记录: ${phoneNumber} | ${status}`);
+      console.log(`==================`);
+      return null;
+    }
+    
+    // 创建记录
+    const record = {
+      id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`, // 使ID更加唯一
+      phoneNumber,
+      timestamp: Date.now(),
+      time: formatTime(Date.now()),
+      status,
+      duration
+    };
+    
+    // 添加到数组开头
+    callRecords.unshift(record);
+    resultRecord = record;
+    
+    // 如果记录超过1000条，删除旧记录
+    if (callRecords.length > 1000) {
+      callRecords.splice(1000);
+    }
+    
+    // 打印到控制台
+    const durationText = duration ? ` (${duration.toFixed(1)}秒)` : '';
+    console.log(`========================`);
+    console.log(`新增通话记录: ${phoneNumber} | ${status}${durationText}`);
+    console.log(`========================`);
+    
+    // 保存记录到文件
+    saveCallRecords();
+    
+    // 广播给客户端
+    io.emit('call_record_update', record);
   }
   
-  // 创建记录
-  const record = {
-    id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`, // 使ID更加唯一
-    phoneNumber,
+  // 在WebSocket广播之外，发送一个特殊的记录更新事件，帮助手机客户端同步
+  io.emit('phone_record_update', {
+    type: 'record_update',
     timestamp: Date.now(),
-    time: formatTime(Date.now()),
-    status,
-    duration
-  };
-  
-  // 添加到数组开头
-  callRecords.unshift(record);
-  
-  // 如果记录超过1000条，删除旧记录
-  if (callRecords.length > 1000) {
-    callRecords.splice(1000);
-  }
-  
-  // 打印到控制台
-  const durationText = duration ? ` (${duration.toFixed(1)}秒)` : '';
-  console.log(`========================`);
-  console.log(`新增通话记录: ${phoneNumber} | ${status}${durationText}`);
-  console.log(`========================`);
-  
-  // 保存记录到文件
-  saveCallRecords();
-  
-  // 广播给客户端
-  io.emit('call_record_update', record);
+    record: resultRecord,
+    allRecords: getMergedRecords()
+  });
   
   // 保存后验证
   console.log(`当前记录数量: ${callRecords.length}`);
   console.log(`=======================================\n`);
   
-  return record;
+  return resultRecord;
 }
 
 // 路由
@@ -644,15 +654,26 @@ app.get('/keep-alive', (req, res) => {
 // 添加从手机端同步记录的API端点
 app.post('/api/sync-records', (req, res) => {
   try {
-    const { phoneRecords } = req.body;
+    const { phoneRecords, lastSyncTime = 0 } = req.body;
     
+    console.log(`收到来自手机的同步请求，上次同步时间: ${new Date(parseInt(lastSyncTime)).toISOString()}`);
     console.log(`收到来自手机的 ${phoneRecords?.length || 0} 条通话记录`);
     
+    // 获取服务器上次同步后的新记录
+    const newServerRecords = callRecords.filter(r => r.timestamp > parseInt(lastSyncTime));
+    console.log(`服务器有 ${newServerRecords.length} 条新记录需要发送到手机`);
+    
+    // 不再严格依赖手机发送的记录，即使手机没有发送记录，也返回服务器记录
     if (!Array.isArray(phoneRecords) || phoneRecords.length === 0) {
+      // 返回合并后的记录给手机
+      const mergedRecords = getMergedRecords();
+      
       return res.json({ 
         success: true, 
-        message: '没有记录需要同步',
-        recordCount: callRecords.length 
+        message: '已返回服务器最新记录',
+        recordCount: mergedRecords.length,
+        records: mergedRecords,
+        syncTime: Date.now()
       });
     }
     
@@ -661,7 +682,7 @@ app.post('/api/sync-records', (req, res) => {
     
     // 将手机记录转换为服务器记录格式
     const convertedRecords = phoneRecords.map(pr => ({
-      id: pr.id || Date.now(),
+      id: pr.id || `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       phoneNumber: pr.number,
       timestamp: new Date(pr.date).getTime() || Date.now(),
       time: formatTime(new Date(pr.date).getTime() || Date.now()),
@@ -703,12 +724,16 @@ app.post('/api/sync-records', (req, res) => {
       console.log(`合并后共有 ${callRecords.length} 条记录`);
     }
     
+    // 获取合并后的记录
+    const mergedRecords = getMergedRecords();
+    
     // 向客户端返回所有记录
     res.json({
       success: true,
       message: merged ? '记录已合并' : '没有新记录',
-      recordCount: callRecords.length,
-      records: callRecords
+      recordCount: mergedRecords.length,
+      records: mergedRecords,
+      syncTime: Date.now() // 返回当前时间戳作为同步时间点
     });
   } catch (error) {
     console.error('同步记录失败:', error);
@@ -719,37 +744,38 @@ app.post('/api/sync-records', (req, res) => {
   }
 });
 
+// 辅助函数，获取合并后的记录，复用合并记录的逻辑
+function getMergedRecords() {
+  // 过滤无效的记录
+  const validRecords = callRecords.filter(record => 
+    record && record.phoneNumber && record.phoneNumber.trim() !== '');
+  
+  // 按号码分组并合并记录
+  const phoneNumberMap = new Map();
+  
+  // 先按时间戳降序排序
+  const sortedRecords = [...validRecords].sort((a, b) => b.timestamp - a.timestamp);
+  
+  // 为每个号码只保留最新的一条记录
+  sortedRecords.forEach(record => {
+    if (!phoneNumberMap.has(record.phoneNumber)) {
+      phoneNumberMap.set(record.phoneNumber, record);
+    }
+  });
+  
+  // 转换为数组并再次按时间戳排序，确保最新的记录在前面
+  return Array.from(phoneNumberMap.values())
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .filter(r => r.phoneNumber && r.phoneNumber.trim() !== '');
+}
+
 // 添加获取合并后通话记录的API端点
 app.get('/api/merged-call-records', (req, res) => {
   try {
     console.log('请求合并后的通话记录');
     
-    // 过滤无效的记录
-    const validRecords = callRecords.filter(record => 
-      record && record.phoneNumber && record.phoneNumber.trim() !== '');
-      
-    // 输出过滤前后的记录数量
-    console.log(`过滤前: ${callRecords.length} 条记录, 过滤后: ${validRecords.length} 条记录`);
-    
-    // 按号码分组并合并记录
-    const phoneNumberMap = new Map();
-    
-    // 先按时间戳降序排序
-    const sortedRecords = [...validRecords].sort((a, b) => b.timestamp - a.timestamp);
-    
-    // 为每个号码只保留最新的一条记录
-    sortedRecords.forEach(record => {
-      if (!phoneNumberMap.has(record.phoneNumber)) {
-        phoneNumberMap.set(record.phoneNumber, record);
-      }
-    });
-    
-    // 转换为数组并再次按时间戳排序，确保最新的记录在前面
-    const mergedRecords = Array.from(phoneNumberMap.values())
-      .sort((a, b) => b.timestamp - a.timestamp);
-    
-    // 移除空号码记录
-    const finalRecords = mergedRecords.filter(r => r.phoneNumber && r.phoneNumber.trim() !== '');
+    // 使用辅助函数获取合并后的记录
+    const finalRecords = getMergedRecords();
     
     console.log(`返回 ${finalRecords.length} 条合并后的通话记录，总记录数: ${callRecords.length}`);
     
@@ -766,6 +792,61 @@ app.get('/api/merged-call-records', (req, res) => {
     console.error('获取合并后通话记录失败:', error);
     res.status(500).json({ error: '获取合并后通话记录失败' });
   }
+});
+
+// 专门为手机APP提供的获取通话记录的API
+app.get('/api/phone-call-records', (req, res) => {
+  try {
+    console.log('手机APP请求通话记录');
+    
+    // 获取请求中的时间戳参数，如果没有则默认为0
+    const lastSyncTime = parseInt(req.query.since || '0');
+    console.log(`手机上次同步时间: ${new Date(lastSyncTime).toISOString()}`);
+    
+    // 获取所有有效记录
+    const mergedRecords = getMergedRecords();
+    
+    // 获取自上次同步以来的新记录(如果指定了同步时间)
+    const newRecords = lastSyncTime > 0 
+      ? mergedRecords.filter(r => r.timestamp > lastSyncTime)
+      : mergedRecords;
+    
+    console.log(`找到 ${newRecords.length} 条新记录，总记录数: ${mergedRecords.length}`);
+    
+    // 确保响应包含所有记录，即使没有新记录
+    res.json({
+      success: true,
+      syncTime: Date.now(),
+      hasNewRecords: newRecords.length > 0,
+      newRecordsCount: newRecords.length,
+      totalRecords: mergedRecords.length,
+      // 总是返回所有记录，确保手机有完整数据
+      records: mergedRecords
+    });
+    
+  } catch (error) {
+    console.error('处理手机通话记录请求失败:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || '获取通话记录失败'
+    });
+  }
+});
+
+// 添加一个事件推送API端点
+app.post('/api/register-push', (req, res) => {
+  const { deviceId, pushToken } = req.body;
+  
+  console.log(`注册推送设备: ${deviceId}, token: ${pushToken}`);
+  
+  // 这里可以添加推送通知的逻辑，例如使用Firebase Cloud Messaging
+  // 由于超出本项目范围，这里只返回成功响应
+  
+  res.json({
+    success: true,
+    message: '设备注册成功',
+    registered: true
+  });
 });
 
 // 修改端口号和监听地址
