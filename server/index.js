@@ -256,8 +256,17 @@ app.get('/api/status', (req, res) => {
 app.get('/api/calls', (req, res) => {
   const calls = Array.from(activeCalls.entries()).map(([id, call]) => ({
     callId: id,
-    ...call
+    phoneNumber: call.phoneNumber,
+    status: call.status,
+    startTime: call.startTime,
+    answerTime: call.answerTime || null,
+    duration: call.duration || 0,
+    isActive: call.status !== 'ended'
   }));
+  
+  // 增加一些调试信息
+  console.log(`返回 ${calls.length} 个活跃通话`);
+  
   res.json(calls);
 });
 
@@ -622,6 +631,35 @@ app.post('/api/sync-records', (req, res) => {
       success: false, 
       error: error.message 
     });
+  }
+});
+
+// 添加获取合并后通话记录的API端点
+app.get('/api/merged-call-records', (req, res) => {
+  try {
+    console.log('请求合并后的通话记录');
+    
+    // 按号码分组并合并记录
+    const phoneNumberMap = new Map();
+    
+    // 先按时间戳降序排序
+    const sortedRecords = [...callRecords].sort((a, b) => b.timestamp - a.timestamp);
+    
+    // 为每个号码只保留最新的一条记录
+    sortedRecords.forEach(record => {
+      if (!phoneNumberMap.has(record.phoneNumber)) {
+        phoneNumberMap.set(record.phoneNumber, record);
+      }
+    });
+    
+    // 转换为数组
+    const mergedRecords = Array.from(phoneNumberMap.values());
+    
+    console.log(`返回 ${mergedRecords.length} 条合并后的通话记录`);
+    res.json(mergedRecords);
+  } catch (error) {
+    console.error('获取合并后通话记录失败:', error);
+    res.status(500).json({ error: '获取合并后通话记录失败' });
   }
 });
 

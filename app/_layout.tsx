@@ -81,6 +81,8 @@ export function TabLayout() {
             iconName = 'person-outline';
           } else if (route.name === 'favorites') {
             iconName = 'star-outline';
+          } else if (route.name === 'admin') {
+            iconName = 'settings-outline';
           }
           
           return <Ionicons name={iconName} size={size} color={focused ? '#007AFF' : '#999999'} />;
@@ -112,6 +114,13 @@ export function TabLayout() {
         options={{
           title: '收藏',
           tabBarLabel: '收藏'
+        }} 
+      />
+      <Tabs.Screen 
+        name="admin" 
+        options={{
+          title: '管理',
+          tabBarLabel: '管理'
         }} 
       />
     </Tabs>

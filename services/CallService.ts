@@ -220,6 +220,12 @@ const CallService = {
         activeCallId = data.callId;
         activePhoneNumber = phoneNumber;
         
+        // 在通话结束时添加记录
+        if (data.status === 'ended' && data.phoneNumber) {
+          // 获取所有相关记录（同一通话的不同状态）
+          const phoneRecords = await CallService.syncCallRecords([]);
+        }
+        
         return data;
       } catch (error) {
         console.error('发起通话失败:', error);
@@ -538,6 +544,28 @@ const CallService = {
     }, 60000); // 每60秒检查一次
     
     return () => clearInterval(interval); // 返回清理函数
+  },
+  
+  // 转换服务器记录到本地格式并过滤掉已存在的
+  mergeServerRecords: async (serverRecords: any[], existingRecords: Map<string, boolean>): Promise<any[]> => {
+    const newRecords = serverRecords
+      .filter(sr => {
+        // 更改比对键，加入状态信息避免过滤掉同一通话的不同状态
+        const key = sr.phoneNumber + '-' + sr.timestamp + '-' + sr.status;
+        return !existingRecords.has(key);
+      })
+      .map(sr => {
+        // 转换为需要的格式
+        return {
+          id: sr.id.toString(),
+          phoneNumber: sr.phoneNumber,
+          timestamp: sr.timestamp,
+          status: sr.status,
+          duration: sr.duration || 0
+        };
+      });
+    
+    return newRecords;
   }
 };
 
