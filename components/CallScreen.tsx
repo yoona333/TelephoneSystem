@@ -10,53 +10,16 @@ import io from 'socket.io-client';
 
 const { width, height } = Dimensions.get('window');
 
-// 创建 Socket 实例 - 使用 CallService 导出的 API_URL
-const socket = io(API_URL, {
-  transports: ['polling', 'websocket'], // 先使用 polling，再尝试 websocket
-  reconnection: true,
-  reconnectionAttempts: Infinity,
-  reconnectionDelay: 1000,
-  reconnectionDelayMax: 5000,
-  timeout: 30000, // 增加超时时间，适应互联网延迟
-  // @ts-ignore
-  pingTimeout: 120000, // 增加为2分钟，适应远程服务器
-  // @ts-ignore
-  pingInterval: 25000, // 保持心跳频率
-  forceNew: false, // 避免创建多个连接
-  autoConnect: true,
-  query: {
-    clientType: 'mobile',
-    clientVersion: '1.0.0',
-    platform: Platform.OS,
-    clientTime: new Date().toISOString() // 添加客户端时间帮助调试
-  }
-});
-
-// 添加事件监听
-socket.on('connect', () => {
-  console.log('Socket连接成功, ID:', socket.id);
-});
-
-socket.on('disconnect', (reason) => {
-  console.log('Socket连接断开, 原因:', reason);
-});
-
-socket.on('welcome', (data) => {
-  console.log('收到服务器欢迎消息:', data);
-});
-
-socket.on('server_ping', (data) => {
-  console.log('收到服务器ping:', data);
-  // 回应pong
-  socket.emit('pong', { time: new Date().toISOString() });
-});
+// 使用服务中的Socket，而不是创建新的
+// 不再创建新的Socket连接，改为使用服务中的
 
 interface CallScreenProps {
   phoneNumber: string;
   onHangup: () => void;
+  callId?: string; // 添加callId参数，可选
 }
 
-export default function CallScreen({ phoneNumber, onHangup }: CallScreenProps) {
+export default function CallScreen({ phoneNumber, onHangup, callId }: CallScreenProps) {
   const [callStatus, setCallStatus] = useState<'dialing' | 'ringing' | 'connected' | 'ended'>('dialing');
   const [callDuration, setCallDuration] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
@@ -65,8 +28,7 @@ export default function CallScreen({ phoneNumber, onHangup }: CallScreenProps) {
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
   const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const callIdRef = useRef<string | null>(null);
-  const hasInitializedRef = useRef(false);
+  const callIdRef = useRef<string | null>(callId || null);
   const processedStatusesRef = useRef(new Set());
   const [callRecords, setCallRecords] = useState<any[]>([]);
   const appState = useRef(AppState.currentState);
@@ -75,11 +37,7 @@ export default function CallScreen({ phoneNumber, onHangup }: CallScreenProps) {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', nextAppState => {
       if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
-        console.log('App 从后台进入前台，重新连接 Socket');
-        // 重新连接 socket
-        if (!socket.connected) {
-          socket.connect();
-        }
+        console.log('App 从后台进入前台');
       }
       appState.current = nextAppState;
     });
@@ -107,52 +65,8 @@ export default function CallScreen({ phoneNumber, onHangup }: CallScreenProps) {
     }
   };
 
-  // 修改通话初始化逻辑，防止多次请求
-  useEffect(() => {
-    const initCall = async () => {
-      if (hasInitializedRef.current) {
-        return; // 已经初始化过，不再重复
-      }
-      
-      hasInitializedRef.current = true;
-      
-      try {
-        // 发起通话请求
-        const response = await fetch(`${API_URL}/api/call`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ phoneNumber })
-        });
-        
-        if (!response.ok) {
-          throw new Error('发起通话失败');
-        }
-        
-        const { callId } = await response.json();
-        callIdRef.current = callId;
-      } catch (error) {
-        console.error('初始化通话失败:', error);
-        onHangup?.();
-      }
-    };
-    
-    initCall();
-    
-    return () => {
-      if (callIdRef.current) {
-        fetch(`${API_URL}/api/hangup`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ callId: callIdRef.current })
-        }).catch(console.error);
-      }
-      stopTimer();
-    };
-  }, [phoneNumber, onHangup]);
+  // 移除重复的通话初始化逻辑
+  // 不再调用API发起通话，只处理UI显示和状态监听
 
   // 监听通话状态更新
   useEffect(() => {
@@ -162,10 +76,21 @@ export default function CallScreen({ phoneNumber, onHangup }: CallScreenProps) {
     const handleCallStatus = (data: any) => {
       console.log('接收到状态更新:', data);
       
+      // 如果有callId，则使用它；否则尝试匹配电话号码
+      const isThisCall = 
+        (callIdRef.current && data.callId === callIdRef.current) || 
+        (!callIdRef.current && data.phoneNumber === phoneNumber);
+      
       // 确保只处理自己的通话
-      if (!callIdRef.current || data.callId !== callIdRef.current) {
+      if (!isThisCall) {
         console.log('忽略其他通话状态:', data.callId);
         return;
+      }
+      
+      // 如果还没有callId，但匹配了电话号码，则记录callId
+      if (!callIdRef.current && data.callId) {
+        callIdRef.current = data.callId;
+        console.log('记录callId:', data.callId);
       }
       
       // 检查是否已处理过该状态
@@ -199,29 +124,22 @@ export default function CallScreen({ phoneNumber, onHangup }: CallScreenProps) {
     };
 
     // 添加事件监听器
-    socket.on('call_status', handleCallStatus);
-    
-    // 确保连接状态
-    socket.connect();
+    CallService.subscribeToCallStatus(handleCallStatus);
     
     // 清理函数
     return () => {
       console.log('移除通话状态监听器');
-      socket.off('call_status', handleCallStatus);
+      CallService.unsubscribeFromCallStatus(handleCallStatus);
     };
-  }, [callStatus, onHangup]);
+  }, [callStatus, onHangup, phoneNumber]);
 
   // 处理挂断电话
   const handleHangup = async () => {
     try {
       if (callIdRef.current) {
-        await fetch(`${API_URL}/api/hangup`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ callId: callIdRef.current })
-        });
+        await CallService.hangupCall(callIdRef.current);
+      } else {
+        console.warn('尝试挂断但没有callId');
       }
     } catch (error) {
       console.error('挂断通话失败:', error);
@@ -246,27 +164,8 @@ export default function CallScreen({ phoneNumber, onHangup }: CallScreenProps) {
     return number;
   };
 
-  // 在组件挂载时获取记录
-  useEffect(() => {
-    const loadCallRecords = async () => {
-      try {
-        const records = await CallService.getCallRecords();
-        setCallRecords(records);
-      } catch (error) {
-        console.error('加载通话记录失败:', error);
-      }
-    };
-    
-    loadCallRecords();
-  }, []);
-
-  // 修改函数不再依赖外部变量
-  const addNewCallRecord = (phoneNumber: string, callType: string) => {
-    // 直接检查本地存储或最近通话记录
-    // 或将检查移至 CallService
-    console.log(`添加新通话记录: ${phoneNumber}`);
-    // 继续添加记录的逻辑...
-  };
+  // 不再主动获取记录，删除相关代码
+  // 余下的代码保持不变
 
   return (
     <SafeAreaView style={styles.container}>

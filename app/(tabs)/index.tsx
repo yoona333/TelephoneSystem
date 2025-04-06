@@ -682,61 +682,35 @@ export default function PhoneScreen() {
     }
   };
 
-  // 完全重写通话记录管理逻辑
-  useEffect(() => {
-    // 创建一个全局的已处理通话ID集合，确保每个通话只处理一次
-    const processedCallIds = new Set<string>();
-    
-    const handleCallStatus = (data: any) => {
-      console.log('通话状态更新:', data);
-      
-      // 只在通话结束时添加记录
-      if (data.status === 'ended' && data.phoneNumber && data.callId) {
-        // 检查这个通话ID是否已经处理过
-        if (processedCallIds.has(data.callId)) {
-          console.log('忽略已处理的通话ID:', data.callId);
-          return;
-        }
-        
-        // 标记为已处理，设置一个唯一的组合键，包含状态
-        const callKey = `${data.callId}-${data.status}`;
-        processedCallIds.add(callKey);
-        
-        // 延迟5秒后从集合中删除，避免长期占用内存
-        setTimeout(() => {
-          processedCallIds.delete(callKey);
-        }, 5000);
-        
-        // 不再立即添加记录，而是延迟一段时间后直接从服务器获取最新记录
-        console.log('通话已结束，5秒后将从服务器获取更新的记录');
-        setTimeout(() => {
-          forceReloadFromServer().catch(err => {
-            console.error('获取服务器记录失败:', err);
-          });
-        }, 5000);
-      }
-    };
-    
-    // 添加监听器
-    CallService.subscribeToCallStatus(handleCallStatus);
-    
-    // 清理函数
-    return () => {
-      CallService.unsubscribeFromCallStatus(handleCallStatus);
-    };
-  }, [callHistory]); // 依赖callHistory以获取最新状态
-
-  // 在通话结束后同步记录
+  // 完全重写通话记录管理逻辑 - 整合了两个监听器为单一监听器
   useEffect(() => {
     const handleCallStatus = (data: any) => {
       if (!data) return;
       
-      // 只在通话结束时处理
+      // 安全日志 - 隐藏完整电话号码
+      const safePhone = data.phoneNumber ? maskPhoneNumber(data.phoneNumber) : '未知号码';
+      const safeCallId = data.callId ? data.callId.substring(0, 4) + '***' : '无ID';
+      
+      console.log(`通话状态更新: ${data.status || '未知状态'}, 号码: ${safePhone}, ID: ${safeCallId}`);
+      
+      // 如果是通话结束事件
       if (data.status === 'ended' && data.phoneNumber && data.callId) {
-        // 检查这个callId是否已经处理过挂断
+        // 检查这个通话ID是否已经处理过挂断事件
         if (processedHangupCallIds.current.has(data.callId)) {
-          console.log(`通话 ${data.callId} 已处理过挂断，忽略重复事件`);
+          console.log(`通话 ${safeCallId} 已处理过挂断，忽略重复事件`);
           return;
+        }
+        
+        // 如果是当前活跃通话，自动关闭通话界面
+        if (callActive && callData?.callId === data.callId) {
+          console.log('服务器通知通话已结束，关闭通话界面');
+          setCallActive(false);
+          setHeaderVisible(true);
+          setDialPadVisible(false);
+          setCallData(null);
+          
+          // 清空电话号码，准备接受新的输入
+          setPhoneNumber('');
         }
         
         // 添加到已处理集合
@@ -745,20 +719,25 @@ export default function PhoneScreen() {
         // 设置定时器，60秒后从集合中删除，允许将来同一callId再次处理
         setTimeout(() => {
           processedHangupCallIds.current.delete(data.callId);
-          console.log(`通话 ${data.callId} 的处理锁定已释放`);
-        }, 60000); // 从30秒增加到60秒，确保有足够时间去重
+          console.log(`通话 ${safeCallId} 的处理锁定已释放`);
+        }, 60000);
         
-        // 延迟3秒再同步，确保服务器有时间保存记录，并且避免和其他请求冲突
+        // 延迟5秒从服务器获取更新的记录
         setTimeout(() => {
           try {
-            // 不再调用syncRecordsWithServer，直接使用forceReloadFromServer
-            // 确保每次都从服务器获取完整记录，而不是尝试同步本地记录
-            forceReloadFromServer();
-            console.log(`通话 ${data.callId} 结束后已触发记录同步`);
+            forceReloadFromServer().catch(err => {
+              console.error('获取服务器记录失败:', err);
+            });
+            console.log(`通话 ${safeCallId} 结束后已触发记录同步`);
           } catch (error) {
             console.error('通话结束后同步记录失败:', error);
           }
-        }, 3000); // 从2秒增加到3秒
+        }, 5000);
+      }
+      // 如果收到接通命令，更新UI状态
+      else if (data.command === 'answer' && callData?.callId === data.callId) {
+        console.log(`通话已被接通: ${safeCallId}`);
+        // 可以在这里更新UI状态
       }
     };
     
@@ -776,7 +755,125 @@ export default function PhoneScreen() {
         console.error('取消订阅通话状态更新失败:', error);
       }
     };
-  }, [callHistory]);
+  }, [callActive, callData, callHistory]); // 依赖callActive和callData以获取最新状态
+
+  // 添加安全处理函数：遮蔽电话号码
+  const maskPhoneNumber = (phone: string): string => {
+    if (!phone || phone.length < 7) return "***";
+    
+    if (phone.length === 11) {
+      // 11位手机号码通常是: 138****8888
+      return `${phone.substring(0, 3)}****${phone.substring(7)}`;
+    } else {
+      // 其他格式统一处理
+      const visibleLength = Math.min(3, Math.floor(phone.length / 3));
+      return `${phone.substring(0, visibleLength)}${'*'.repeat(phone.length - visibleLength * 2)}${phone.substring(phone.length - visibleLength)}`;
+    }
+  };
+
+  // 修改handleCall函数，增强安全性
+  const handleCall = async (number: string) => {
+    if (!number || number.trim() === '') {
+      return;
+    }
+    
+    // 检查是否有短时间内的重复拨打
+    if (throttleFlag.current) {
+      console.log('短时间内重复点击拨打按钮，忽略本次调用');
+      return;
+    }
+    
+    // 检查是否已经有活跃通话
+    if (callActive && callData?.callId) {
+      console.log('已有活跃通话，忽略新的拨打请求');
+      return;
+    }
+    
+    // 设置节流标记
+    throttleFlag.current = true;
+    
+    // 5秒后重置节流标记
+    setTimeout(() => {
+      throttleFlag.current = false;
+    }, 5000);
+    
+    try {
+      // 先更新UI状态
+      setPhoneNumber(number);
+      
+      // 安全日志 - 隐藏完整电话号码
+      const safePhone = maskPhoneNumber(number);
+      console.log(`开始拨打电话: ${safePhone}`);
+      
+      // 尝试获取归属地信息
+      let locationInfo = "";
+      try {
+        locationInfo = await getPhoneLocation(number);
+      } catch (error) {
+        console.error('获取归属地信息失败');
+      }
+      
+      // 发起通话请求
+      const response = await CallService.initiateCall(number);
+      
+      if (response && response.callId) {
+        // 安全日志
+        const safeCallId = response.callId.substring(0, 4) + '***';
+        console.log(`拨打成功，ID: ${safeCallId}`);
+        
+        // 更新callData前，确保之前的callData被清理
+        if (callData?.callId && callData.callId !== response.callId) {
+          console.log('清理之前的通话状态');
+        }
+        
+        setCallData(response);
+        setCallActive(true);
+        
+        // 不要在这里添加记录，记录会由服务器生成并通过socket推送
+      }
+    } catch (error) {
+      console.error('拨打电话失败');
+      // 如果拨打失败，也不直接添加记录
+      throttleFlag.current = false; // 立即重置节流标记
+    }
+  };
+
+  // 处理挂断电话 - 修改以确保重置所有状态并增强安全性
+  const handleHangup = () => {
+    if (!callActive) {
+      console.log('没有活跃通话，无需挂断');
+      return;
+    }
+    
+    setCallActive(false);
+    setHeaderVisible(true); // 恢复导航头部
+    
+    // 其他挂断逻辑保持不变
+    if (callData?.callId) {
+      // 安全日志
+      const safeCallId = callData.callId.substring(0, 4) + '***';
+      
+      // 将通话ID标记为已处理，防止通话状态监听器再次处理
+      processedHangupCallIds.current.add(callData.callId);
+      
+      console.log(`手动挂断通话: ${safeCallId}`);
+      CallService.hangupCall(callData.callId)
+        .catch(error => console.error('挂断电话失败'));
+        
+      // 60秒后清除，允许将来再使用相同ID
+      setTimeout(() => {
+        processedHangupCallIds.current.delete(callData.callId);
+      }, 60000);
+    }
+    
+    // 重置状态，确保下次可以正常显示号码
+    setPhoneNumber('');
+    setDialPadVisible(false);
+    setCallData(null);
+    
+    // 确保重置拨号状态
+    console.log('通话结束，重置所有拨号状态');
+  };
 
   // 移除本地存储，改为每次从服务器获取
   const loadCallHistory = async () => {
@@ -951,15 +1048,21 @@ export default function PhoneScreen() {
     ? callHistory 
     : callHistory.filter(call => call.type === 'missed');
 
-  // 处理按键输入
+  // 处理按键输入 - 修改以确保号码正确显示
   const handleKeyPress = (key: string) => {
     if (key === 'call') {
       // 这里直接调用了handleCall，但没有防止多次快速点击
       handleCall(phoneNumber);
       return;
     }
+    
     // 添加日志调试
     console.log('按下键:', key);
+    
+    // 如果拨号盘没有显示，确保它显示出来
+    if (!dialPadVisible) {
+      toggleDialPad(true);
+    }
     
     // 使用函数式更新确保状态正确更新
     setPhoneNumber(prev => {
@@ -982,77 +1085,6 @@ export default function PhoneScreen() {
   // 长按删除全部
   const handleLongDelete = () => {
     setPhoneNumber('');
-  };
-
-  // 修改handleCall函数，改进防抖逻辑
-  const handleCall = async (number: string) => {
-    if (!number || number.trim() === '') {
-      return;
-    }
-    
-    // 检查是否有短时间内的重复拨打
-    if (throttleFlag.current) {
-      console.log('短时间内重复点击拨打按钮，忽略本次调用');
-      return;
-    }
-    
-    // 设置节流标记
-    throttleFlag.current = true;
-    
-    // 5秒后重置节流标记
-    setTimeout(() => {
-      throttleFlag.current = false;
-    }, 5000); // 从3秒增加到5秒
-    
-    try {
-      // 先更新UI状态
-      setPhoneNumber(number);
-      console.log('开始拨打电话:', number);
-      
-      // 尝试获取归属地信息
-      let locationInfo = "";
-      try {
-        locationInfo = await getPhoneLocation(number);
-      } catch (error) {
-        console.error('获取归属地信息失败:', error);
-      }
-      
-      // 发起通话请求
-      const response = await CallService.initiateCall(number);
-      
-      if (response && response.callId) {
-        console.log('拨打成功，callId:', response.callId);
-        // 更新callData前，确保之前的callData被清理
-        if (callData?.callId && callData.callId !== response.callId) {
-          console.log('清理之前的通话状态:', callData.callId);
-        }
-        
-        setCallData(response);
-        setCallActive(true);
-        
-        // 不要在这里添加记录，记录会由服务器生成并通过socket推送
-      }
-    } catch (error) {
-      console.error('拨打电话失败:', error);
-      // 如果拨打失败，也不直接添加记录
-      throttleFlag.current = false; // 立即重置节流标记
-    }
-  };
-
-  // 处理挂断电话
-  const handleHangup = () => {
-    setCallActive(false);
-    setHeaderVisible(true); // 恢复导航头部
-    
-    // 其他挂断逻辑保持不变
-    if (callData?.callId) {
-      CallService.hangupCall(callData.callId)
-        .catch(error => console.error('挂断电话失败:', error));
-    }
-    
-    // 重置状态
-    setPhoneNumber('');
-    setDialPadVisible(false);
   };
 
   // 处理点击通话记录
@@ -1109,13 +1141,33 @@ export default function PhoneScreen() {
 
   // 修改显示/隐藏拨号盘的函数
   const toggleDialPad = (show: boolean) => {
+    console.log(`切换拨号盘显示状态: ${show ? '显示' : '隐藏'}`);
+    
+    // 如果是隐藏，确保关闭键盘
+    if (!show) {
+      Keyboard.dismiss();
+    }
+    
     setDialPadVisible(show);
+    
+    // 如果显示拨号盘但号码为空，确保拨号盘显示正常
+    if (show && !phoneNumber) {
+      console.log('打开拨号盘，准备接收输入...');
+    }
+    
+    // 使用更平滑的动画效果
     Animated.spring(slideAnim, {
       toValue: show ? 1 : 0,
       useNativeDriver: true,
       damping: 20,
       stiffness: 90,
-    }).start();
+      overshootClamping: false,
+    }).start(() => {
+      // 动画完成后，如果是隐藏操作，确保状态完全重置
+      if (!show) {
+        console.log('拨号盘隐藏动画完成');
+      }
+    });
   };
 
   // 格式化电话号码显示
@@ -1161,7 +1213,7 @@ export default function PhoneScreen() {
             </Text>
             {phoneNumber.length > 0 && (
               <Text style={styles.phoneLocationText}>
-                {currentLocation || "查询中..."}
+                {currentLocation || ""}
               </Text>
             )}
           </View>
@@ -1180,7 +1232,12 @@ export default function PhoneScreen() {
               zIndex: 50 // 确保在其他UI元素上方，但在拨号盘下方
             }}
             activeOpacity={1}
-            onPress={() => toggleDialPad(false)}
+            onPress={() => {
+              console.log('点击背景，收起拨号盘');
+              toggleDialPad(false);
+              // 关闭键盘如果有的话
+              Keyboard.dismiss();
+            }}
           />
         )}
 
@@ -1500,7 +1557,7 @@ export default function PhoneScreen() {
     
     const updatePhoneLocation = async () => {
       if (phoneNumber.length >= 7) {
-        setCurrentLocation(""); // 不显示"查询中..."
+        // 不显示任何加载状态，仅在最终结果出来后显示
         try {
           const location = await getPhoneLocation(phoneNumber);
           if (isMounted) {
@@ -1684,6 +1741,25 @@ export default function PhoneScreen() {
     }
   };
 
+  // 为整个应用添加点击处理以关闭拨号盘
+  useEffect(() => {
+    // 添加触摸事件监听器以关闭拨号盘
+    const handleTouchEnd = (event: any) => {
+      // 仅当拨号盘显示且不在通话中时处理
+      if (dialPadVisible && !callActive) {
+        // 这里的逻辑在TouchableOpacity中处理，这是额外的保障
+        // 大部分情况下通过透明背景层的onPress已经能处理
+      }
+    };
+
+    // 实际环境中不需要进行事件监听，透明背景层已足够
+    // 这里保留代码仅作参考，实际不执行
+    
+    return () => {
+      // 清理函数
+    };
+  }, [dialPadVisible, callActive]);
+
   return (
     <>
       <Stack.Screen
@@ -1818,26 +1894,12 @@ export default function PhoneScreen() {
           <CallScreen 
             phoneNumber={phoneNumber}
             onHangup={handleHangup}
+            callId={callData?.callId}
           />
         </Modal>
       </ThemedView>
     </>
   );
-
-  // 增强自动同步能力，增加定期后台同步
-  useEffect(() => {
-    // 应用启动时执行一次同步
-    autoSyncWithServer();
-    
-    // 设置定期自动同步（每60秒同步一次）
-    const syncInterval = setInterval(() => {
-      console.log('执行定期自动同步...');
-      autoSyncWithServer();
-    }, 60000);
-    
-    // 清理定时器
-    return () => clearInterval(syncInterval);
-  }, []);
 }
 
 // 更新样式，更接近图片风格
