@@ -11,6 +11,9 @@ export interface CallItem {
   duration?: number;
   type?: string;
   name?: string;
+  // 添加与服务器端兼容的属性
+  phoneNumber?: string;
+  timestamp?: number;
 }
 
 // 使用环境变量动态选择API地址
@@ -234,19 +237,19 @@ const CallService = {
         activeCallId = data.callId;
         activePhoneNumber = phoneNumber;
         
-        // 在通话结束时添加记录
-        if (data.status === 'ended' && data.phoneNumber) {
-          // 获取所有相关记录（同一通话的不同状态）
-          const phoneRecords = await CallService.syncCallRecords([]);
-        }
+        // 不再在这里添加记录或尝试同步记录
+        // 记录会由服务器生成，并通过socket通知所有客户端
         
         return data;
       } catch (error) {
         console.error('发起通话失败:', error);
         throw error;
       } finally {
-        // 完成后清除pending状态
-        delete pendingCalls[phoneNumber];
+        // 完成后清除pending状态，但延迟5秒，避免立即重复拨打
+        setTimeout(() => {
+          console.log(`清除拨打锁定: ${phoneNumber}`);
+          delete pendingCalls[phoneNumber];
+        }, 5000);
       }
     });
   },
@@ -264,12 +267,16 @@ const CallService = {
       
       // 尝试挂断前检查是否是当前活动通话
       if (activeCallId === callId) {
+        // 发送标记，告知服务器这是一个更新请求而不是新记录
         const response = await fetch(`${API_URL}/api/hangup`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ callId })
+          body: JSON.stringify({ 
+            callId,
+            updateOnly: true // 明确指定只更新记录，不创建新记录
+          })
         });
         
         // 即使API返回404，也要清除活动通话状态
@@ -367,59 +374,66 @@ const CallService = {
     callStatusListeners.forEach(listener => listener(data));
   },
   
-  // 添加获取通话记录的方法
-  getCallRecords: async (): Promise<any[]> => {
+  // 从服务器获取通话记录
+  getCallRecords: async (forceGetAll = true): Promise<CallItem[]> => {
     try {
-      // 从本地存储获取上次同步时间
-      let lastSyncTime = '0';
-      try {
-        lastSyncTime = await AsyncStorage.getItem(LAST_SYNC_TIME_KEY) || '0';
-        console.log('读取上次同步时间:', lastSyncTime ? new Date(parseInt(lastSyncTime)).toISOString() : '从未同步');
-      } catch (e) {
-        console.error('获取上次同步时间失败:', e);
-      }
+      console.log('正在获取所有通话记录，忽略上次同步时间');
       
-      // 使用新的手机专用API端点
-      const url = `${API_URL}/api/phone-call-records?since=${lastSyncTime}`;
-      console.log("请求手机通话记录URL:", url);
+      // 构造请求URL，添加时间戳防止缓存和强制获取所有参数
+      const timestamp = Date.now();
+      const url = `${API_URL}/api/phone-call-records?t=${timestamp}&force=true&all=true`;
       
+      // 打印请求URL
+      console.log(`请求URL: ${url}`);
+      
+      // 发送请求获取通话记录
       const response = await fetch(url, {
-        // 禁用缓存
+        method: 'GET',
         headers: {
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
         }
       });
       
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`API错误: ${response.status}, 内容: ${errorText}`);
-        throw new Error(`API错误: ${response.status}`);
-      }
-      
-      const result = await response.json();
-      
-      if (result.success) {
-        console.log(`获取了 ${result.records.length} 条通话记录，其中 ${result.newRecordsCount} 条是新记录`);
+      // 检查响应状态
+      if (response.ok) {
+        const data = await response.json();
+        console.log(`获取通话记录成功，获取到 ${data.records?.length || 0} 条记录`);
         
-        // 保存同步时间到本地存储
-        try {
-          if (result.syncTime) {
-            await AsyncStorage.setItem(LAST_SYNC_TIME_KEY, result.syncTime.toString());
-            console.log('保存同步时间:', new Date(result.syncTime).toISOString());
+        // 不再保存同步时间，确保每次都获取全部记录
+        
+        // 将服务器记录转换为客户端格式
+        const clientRecords = (data.records || []).map((record: any) => {
+          // 确定记录类型
+          let recordType = 'missed';
+          if (record.status === '已拨打') {
+            recordType = 'outgoing';
+          } else if (record.status === '已接通' || record.status === '已接听') {
+            recordType = 'incoming';
           }
-        } catch (e) {
-          console.error('保存同步时间失败:', e);
-        }
+          
+          // 返回客户端格式的记录
+          return {
+            id: record.id || `${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+            number: record.phoneNumber || '',
+            date: new Date(record.timestamp || Date.now()).toISOString(),
+            duration: record.duration || 0,
+            type: recordType,
+            // 保留原始字段以便在其他地方需要时使用
+            phoneNumber: record.phoneNumber,
+            timestamp: record.timestamp
+          };
+        });
         
-        return result.records;
+        return clientRecords;
       } else {
-        console.error('API返回错误:', result.error || '未知错误');
+        console.error('获取通话记录失败，服务器响应状态码:', response.status);
         return [];
       }
     } catch (error) {
-      console.error('获取通话记录失败:', error);
-      // 出错时返回空数组而不是抛出异常
+      console.error('获取通话记录出错:', error);
       return [];
     }
   },
@@ -453,72 +467,160 @@ const CallService = {
     socket.off('call_record_update', callback);
   },
   
-  // 添加手机记录同步方法
-  syncCallRecords: async (records: CallItem[]): Promise<CallItem[]> => {
+  // 修改 syncCallRecords 方法，增强去重功能
+  syncCallRecords: async (records: CallItem[]): Promise<any[]> => {
     try {
-      console.log('开始同步通话记录到服务器');
+      console.log(`同步 ${records.length} 条通话记录到服务器...`);
       
-      // 确保每个记录都有唯一ID
-      const recordsWithUniqueIds = records.map(record => {
-        if (!record.id || record.id.trim() === '') {
-          return {
-            ...record,
-            id: `${Date.now()}-${Math.floor(Math.random() * 10000)}`
-          };
-        }
-        return record;
-      });
+      // 首先检查服务器连接
+      const isConnected = await CallService.checkConnection();
+      if (!isConnected) {
+        console.log('服务器连接失败，跳过同步记录');
+        return [];
+      }
       
+      // 转换记录格式为服务器可接受的格式
+      const serverRecords = records.map(record => ({
+        id: record.id,
+        phoneNumber: record.number,
+        timestamp: new Date(record.date).getTime(),
+        status: record.type === 'outgoing' ? '已拨打' : 
+                record.type === 'incoming' ? '已接听' : '未接听',
+        duration: record.duration || null
+      }));
+      
+      // 发送到服务器
       const response = await fetch(`${API_URL}/api/sync-records`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache, no-store'
+          'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ records: recordsWithUniqueIds }),
+        body: JSON.stringify({ records: serverRecords })
       });
-
+      
       if (!response.ok) {
-        throw new Error(`服务器响应错误: ${response.status}`);
+        throw new Error(`API错误: ${response.status}`);
       }
-
-      const data = await response.json();
-      console.log('同步完成，服务器返回记录数:', data.records.length);
       
-      // 确保返回的记录也有唯一ID
-      const serverRecords = data.records.map((record: CallItem) => {
-        if (!record.id || record.id.trim() === '') {
-          return {
-            ...record,
-            id: `${Date.now()}-${Math.floor(Math.random() * 10000)}`
-          };
-        }
-        return record;
-      });
+      const result = await response.json();
+      console.log('同步完成，服务器返回记录数:', result.records.length);
       
-      return serverRecords;
+      // 返回服务器的记录
+      return result.records || [];
     } catch (error) {
       console.error('同步通话记录失败:', error);
-      throw error;
+      return [];
     }
   },
   
   // 添加去重方法
   getUniqueCallRecords: async (): Promise<any[]> => {
-    const records = await CallService.getCallRecords();
-    
-    // 使用Map去重，以phoneNumber和timestamp为键
-    const uniqueMap = new Map();
-    records.forEach(record => {
-      const key = `${record.phoneNumber}-${record.timestamp}`;
-      if (!uniqueMap.has(key)) {
-        uniqueMap.set(key, record);
+    try {
+      console.log('获取唯一通话记录并立即从服务器获取');
+      
+      // 先检查服务器连接
+      let isConnected = false;
+      try {
+        isConnected = await CallService.checkConnection();
+        if (!isConnected) {
+          console.log('服务器连接失败，跳过获取记录');
+          return [];
+        }
+      } catch (connError) {
+        console.error('检查服务器连接时出错:', connError);
+        return [];
       }
-    });
-    
-    // 转回数组并按时间戳排序
-    return Array.from(uniqueMap.values())
-      .sort((a, b) => b.timestamp - a.timestamp);
+      
+      // 强制从服务器获取全部记录
+      const timestamp = Date.now();
+      const url = `${API_URL}/api/phone-call-records?t=${timestamp}&force=true&all=true`;
+      console.log(`请求URL: ${url}`);
+      
+      // 添加超时控制
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5秒超时
+      
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+          }
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          console.error(`服务器响应错误: ${response.status}`);
+          return [];
+        }
+        
+        // 检查响应是否为JSON
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          console.error('响应不是JSON格式:', contentType);
+          return [];
+        }
+        
+        const data = await response.json();
+        console.log(`获取到 ${data.records?.length || 0} 条服务器记录`);
+        
+        if (!data.records || data.records.length === 0) {
+          console.log('服务器没有记录');
+          return [];
+        }
+        
+        // 使用Map去重，以number和date为键
+        const uniqueMap = new Map();
+        data.records.forEach((record: any) => {
+          // 转换为客户端格式
+          let recordType = 'missed';
+          if (record.status === '已拨打') {
+            recordType = 'outgoing';
+          } else if (record.status === '已接通' || record.status === '已接听') {
+            recordType = 'incoming';
+          }
+          
+          const clientRecord = {
+            id: record.id || `${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+            number: record.phoneNumber || '',
+            date: new Date(record.timestamp || Date.now()).toISOString(),
+            duration: record.duration || 0,
+            type: recordType,
+            // 保留原始字段以便在其他地方需要时使用
+            phoneNumber: record.phoneNumber,
+            timestamp: record.timestamp
+          };
+          
+          // 使用number+timestamp作为唯一键
+          const key = `${record.phoneNumber}-${record.timestamp}`;
+          uniqueMap.set(key, clientRecord);
+        });
+        
+        // 转回数组并按时间戳排序
+        return Array.from(uniqueMap.values())
+          .sort((a, b) => {
+            const dateA = new Date(a.date).getTime();
+            const dateB = new Date(b.date).getTime();
+            return dateB - dateA;
+          });
+      } catch (error: any) {
+        clearTimeout(timeoutId);
+        if (error.name === 'AbortError') {
+          console.error('请求超时，服务器可能不可用');
+        } else {
+          console.error('获取记录时出错:', error);
+        }
+        return [];
+      }
+    } catch (error) {
+      console.error('获取唯一记录失败:', error);
+      return [];
+    }
   },
   
   // 修改 checkConnection 方法
@@ -651,6 +753,21 @@ const CallService = {
       
       const result = await response.json();
       console.log('服务器通话记录已清空:', result);
+      
+      // 确保Socket连接可用
+      try {
+        await ensureSocketConnection();
+        
+        // 如果Socket可用，发送清空记录事件到服务器，让服务器广播给所有客户端
+        if (socket && socket.connected) {
+          console.log('发送records_cleared事件通知服务器');
+          socket.emit('client_cleared_records', { timestamp: Date.now() });
+        } else {
+          console.log('Socket未连接，无法发送清空记录通知');
+        }
+      } catch (socketError) {
+        console.error('Socket通知发送失败:', socketError);
+      }
       
       // 重置上次同步时间
       try {

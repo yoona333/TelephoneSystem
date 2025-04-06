@@ -93,88 +93,190 @@
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
-        // 获取DOM元素
-        const callTableBody = document.getElementById('callTableBody');
-        
-        // 页面加载时获取通话记录
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', function() {
+            // 立即加载记录
             loadCallRecords();
             
-            // 启动定时刷新
-            setInterval(loadCallRecords, 10000); // 每10秒刷新一次
+            // 设置自动刷新
+            setInterval(loadCallRecords, 5000);
+            
+            // 设置socket连接
+            let socket;
+            try {
+                socket = io();
+                
+                // 显示欢迎消息
+                socket.on('welcome', (data) => {
+                    console.log('服务器欢迎信息:', data);
+                    // 添加连接成功的提示
+                    document.getElementById('connectionStatus').innerText = '服务器已连接';
+                    document.getElementById('connectionStatus').classList.add('text-success');
+                });
+                
+                // 监听通话状态更新
+                socket.on('call_status', (data) => {
+                    console.log('收到通话状态更新:', data);
+                    
+                    // 添加通知声音和桌面通知
+                    if (data.status === 'ringing') {
+                        playSound('ring.mp3');
+                        showNotification('新来电', `来自 ${data.phoneNumber} 的新来电`);
+                        
+                        // 添加高亮提示
+                        document.getElementById('newCallAlert').classList.remove('d-none');
+                        document.getElementById('newCallAlert').innerText = `有新来电：${data.phoneNumber}`;
+                    } else if (data.status === 'ended') {
+                        playSound('end.mp3');
+                        showNotification('通话结束', `与 ${data.phoneNumber} 的通话已结束`);
+                        
+                        // 移除高亮提示
+                        document.getElementById('newCallAlert').classList.add('d-none');
+                    }
+                    
+                    // 无论什么状态都刷新记录列表
+                    setTimeout(loadCallRecords, 1000);
+                });
+                
+                // 监听记录更新
+                socket.on('call_record_update', (data) => {
+                    console.log('收到记录更新:', data);
+                    // 刷新记录列表
+                    setTimeout(loadCallRecords, 1000);
+                });
+                
+                // 监听所有记录更新
+                socket.on('records_updated', (data) => {
+                    console.log('所有记录已更新:', data);
+                    // 刷新记录列表
+                    setTimeout(loadCallRecords, 1000);
+                });
+                
+                // 监听错误
+                socket.on('error', (error) => {
+                    console.error('Socket错误:', error);
+                });
+                
+                // 监听断开连接
+                socket.on('disconnect', (reason) => {
+                    console.log('Socket断开连接:', reason);
+                    // 添加断开连接的提示
+                    document.getElementById('connectionStatus').innerText = '服务器已断开';
+                    document.getElementById('connectionStatus').classList.remove('text-success');
+                    document.getElementById('connectionStatus').classList.add('text-danger');
+                });
+                
+            } catch (error) {
+                console.error('Socket连接失败:', error);
+            }
         });
         
         // 加载通话记录
         async function loadCallRecords() {
             try {
-                const response = await fetch('/api/merged-call-records', {
-                    cache: 'no-cache',
-                    headers: {
-                        'Cache-Control': 'no-cache'
-                    }
-                });
-                const result = await response.json();
+                // 加载活跃通话
+                const activeCallsResponse = await fetch('/api/calls');
+                const activeCalls = await activeCallsResponse.json();
                 
-                // 适应新的API格式，result包含records数组
-                const records = result.records || result;
+                // 渲染活跃通话
+                const activeCallsList = document.getElementById('activeCalls');
+                activeCallsList.innerHTML = '';
                 
-                if (!records || records.length === 0) {
-                    callTableBody.innerHTML = '<tr><td colspan="4" class="message">暂无通话记录</td></tr>';
-                    return;
+                if (activeCalls.length > 0) {
+                    document.getElementById('activeCallsSection').classList.remove('d-none');
+                    
+                    activeCalls.forEach(call => {
+                        const callElement = document.createElement('div');
+                        callElement.classList.add('card', 'mb-3', 'call-card');
+                        
+                        // 根据状态设置不同的背景色
+                        if (call.status === 'ringing') {
+                            callElement.classList.add('bg-warning');
+                        } else if (call.status === 'active') {
+                            callElement.classList.add('bg-success', 'text-white');
+                        }
+                        
+                        let durationText = '';
+                        if (call.status === 'active') {
+                            const startTime = new Date(call.answerTime || call.startTime);
+                            const durationSec = Math.floor((new Date() - startTime) / 1000);
+                            durationText = `通话时长: ${formatDuration(durationSec)}`;
+                        }
+                        
+                        callElement.innerHTML = `
+                            <div class="card-body">
+                                <h5 class="card-title">${call.phoneNumber}</h5>
+                                <p class="card-text">状态: ${formatStatus(call.status)}</p>
+                                <p class="card-text">开始时间: ${formatTime(call.startTime)}</p>
+                                ${durationText ? `<p class="card-text">${durationText}</p>` : ''}
+                                <div class="btn-group">
+                                    ${call.status === 'ringing' ? 
+                                        `<button class="btn btn-success" onclick="answerCall('${call.phoneNumber}')">接听</button>` : ''}
+                                    <button class="btn btn-danger" onclick="hangupCall('${call.phoneNumber}')">挂断</button>
+                                </div>
+                            </div>
+                        `;
+                        
+                        activeCallsList.appendChild(callElement);
+                    });
+                } else {
+                    document.getElementById('activeCallsSection').classList.add('d-none');
                 }
                 
-                // 不需要再次排序，API已经返回排序后的数据
+                // 同时加载历史记录
+                const callRecordsResponse = await fetch('/api/call-records');
+                const callRecords = await callRecordsResponse.json();
                 
-                let html = '';
-                records.forEach((record, index) => {
-                    html += `
+                // 渲染历史记录
+                const recordsList = document.getElementById('callRecords');
+                recordsList.innerHTML = '';
+                
+                if (callRecords.length > 0) {
+                    // 将记录按时间戳排序，最新的在前面
+                    callRecords.sort((a, b) => b.timestamp - a.timestamp);
+                    
+                    callRecords.forEach(record => {
+                        const recordElement = document.createElement('tr');
+                        const recordDate = new Date(record.timestamp);
+                        
+                        // 格式化状态为中文
+                        const statusMap = {
+                            '已发起': '<span class="badge bg-info">已发起</span>',
+                            '响铃中': '<span class="badge bg-warning">响铃中</span>',
+                            '已接通': '<span class="badge bg-success">已接通</span>',
+                            '已挂断': '<span class="badge bg-danger">已挂断</span>',
+                            '未接听': '<span class="badge bg-secondary">未接听</span>'
+                        };
+                        
+                        recordElement.innerHTML = `
+                            <td>${record.phoneNumber}</td>
+                            <td>${statusMap[record.status] || record.status}</td>
+                            <td>${formatDateTime(recordDate)}</td>
+                            <td>${record.duration ? formatDuration(record.duration) : '无'}</td>
+                        `;
+                        
+                        recordsList.appendChild(recordElement);
+                    });
+                    
+                    // 更新记录数
+                    document.getElementById('recordCount').innerText = callRecords.length;
+                } else {
+                    recordsList.innerHTML = `
                         <tr>
-                            <td>${index + 1}</td>
-                            <td>${record.phoneNumber || '未知号码'}</td>
-                            <td>${record.time || new Date(record.timestamp).toLocaleString()}</td>
-                            <td>
-                                <button class="action-btn" onclick="answerCall('${record.phoneNumber}')">接通</button>
-                                <button class="action-btn hangup-btn" onclick="hangupCall('${record.phoneNumber}')">挂断</button>
-                            </td>
+                            <td colspan="4" class="text-center">暂无通话记录</td>
                         </tr>
                     `;
-                });
-                
-                callTableBody.innerHTML = html;
-            } catch (error) {
-                console.error('加载通话记录失败:', error);
-                callTableBody.innerHTML = '<tr><td colspan="4" class="message">加载失败</td></tr>';
-            }
-        }
-        
-        // 清空通话历史
-        async function clearCallHistory() {
-            if (!confirm('确定要清空所有通话记录吗？')) {
-                return;
-            }
-            
-            try {
-                const response = await fetch('/api/clear-history', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    loadCallRecords();
-                } else {
-                    alert('清空失败: ' + (result.message || '未知错误'));
+                    document.getElementById('recordCount').innerText = '0';
                 }
             } catch (error) {
-                console.error('清空通话记录失败:', error);
-                alert('清空通话记录失败: ' + error.message);
+                console.error('加载通话记录失败:', error);
+                
+                // 显示错误信息
+                document.getElementById('errorMessage').innerText = '加载通话记录失败，请刷新页面重试';
+                document.getElementById('errorMessage').classList.remove('d-none');
             }
         }
         
-        // 接通电话
+        // 接听电话
         async function answerCall(phoneNumber) {
             try {
                 // 找到对应的通话ID
@@ -187,6 +289,7 @@
                     return;
                 }
                 
+                // 发送接听请求，包含updateOnly标记
                 const answerResponse = await fetch('/api/answer', {
                     method: 'POST',
                     headers: {
@@ -194,19 +297,25 @@
                     },
                     body: JSON.stringify({ 
                         callId: call.callId,
-                        updateOnly: true // 添加标记，表示只更新不添加新记录
+                        updateOnly: true  // 添加标记，表示只更新而不是创建新记录
                     })
                 });
                 
                 if (answerResponse.ok) {
-                    // 成功接通，刷新列表
+                    // 接听成功，刷新列表
                     setTimeout(loadCallRecords, 500);
+                    
+                    // 播放接听声音
+                    playSound('answer.mp3');
+                    
+                    // 显示成功消息
+                    showToast('已接听通话');
                 } else {
-                    alert('接通失败');
+                    alert('接听失败');
                 }
             } catch (error) {
-                console.error('接通电话失败:', error);
-                alert('接通电话失败: ' + error.message);
+                console.error('接听电话失败:', error);
+                alert('接听电话失败: ' + error.message);
             }
         }
         
@@ -237,6 +346,12 @@
                 if (hangupResponse.ok) {
                     // 成功挂断，刷新列表
                     setTimeout(loadCallRecords, 500);
+                    
+                    // 播放挂断声音
+                    playSound('end.mp3');
+                    
+                    // 显示成功消息
+                    showToast('已挂断通话');
                 } else {
                     alert('挂断失败');
                 }
@@ -246,36 +361,103 @@
             }
         }
         
-        // 设置socket连接
-        let socket;
-        try {
-            socket = io();
-            
-            socket.on('connect', () => {
-                console.log('Socket连接成功');
-            });
-            
-            socket.on('call_status', (data) => {
-                console.log('收到通话状态更新:', data);
-                
-                // 如果是新通话或通话结束，刷新列表
-                if (data.status === 'ringing' || data.status === 'ended') {
-                    setTimeout(loadCallRecords, 500);
+        // 清空记录
+        async function clearRecords() {
+            if (confirm('确定要清空所有通话记录吗？此操作无法撤销！')) {
+                try {
+                    const response = await fetch('/api/clear-history', {
+                        method: 'POST'
+                    });
+                    
+                    if (response.ok) {
+                        // 刷新记录列表
+                        loadCallRecords();
+                        
+                        // 显示成功消息
+                        showToast('已清空所有通话记录');
+                    } else {
+                        alert('清空记录失败');
+                    }
+                } catch (error) {
+                    console.error('清空记录失败:', error);
+                    alert('清空记录失败: ' + error.message);
                 }
-            });
+            }
+        }
+        
+        // 格式化状态
+        function formatStatus(status) {
+            switch (status) {
+                case 'ringing': return '响铃中';
+                case 'active': return '通话中';
+                case 'ended': return '已结束';
+                default: return status;
+            }
+        }
+        
+        // 格式化日期时间
+        function formatDateTime(date) {
+            return `${date.getFullYear()}-${padZero(date.getMonth() + 1)}-${padZero(date.getDate())} ${padZero(date.getHours())}:${padZero(date.getMinutes())}:${padZero(date.getSeconds())}`;
+        }
+        
+        // 只格式化时间
+        function formatTime(timeStr) {
+            const date = new Date(timeStr);
+            return `${padZero(date.getHours())}:${padZero(date.getMinutes())}:${padZero(date.getSeconds())}`;
+        }
+        
+        // 格式化时长
+        function formatDuration(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return `${mins}分${secs}秒`;
+        }
+        
+        // 补零
+        function padZero(num) {
+            return num < 10 ? `0${num}` : num;
+        }
+        
+        // 播放声音
+        function playSound(soundFile) {
+            try {
+                const audio = new Audio(`/sounds/${soundFile}`);
+                audio.play().catch(e => console.error('播放声音失败:', e));
+            } catch (error) {
+                console.error('播放声音失败:', error);
+            }
+        }
+        
+        // 显示通知
+        function showNotification(title, body) {
+            if ('Notification' in window) {
+                if (Notification.permission === 'granted') {
+                    new Notification(title, {
+                        body: body,
+                        icon: '/favicon.ico'
+                    });
+                } else if (Notification.permission !== 'denied') {
+                    Notification.requestPermission().then(permission => {
+                        if (permission === 'granted') {
+                            new Notification(title, {
+                                body: body,
+                                icon: '/favicon.ico'
+                            });
+                        }
+                    });
+                }
+            }
+        }
+        
+        // 显示提示消息
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            const toastBody = document.getElementById('toastBody');
             
-            socket.on('records_cleared', (data) => {
-                console.log('收到记录清空事件:', data);
-                
-                // 立即刷新列表
-                loadCallRecords();
-            });
+            toastBody.innerText = message;
             
-            socket.on('connect_error', (error) => {
-                console.error('Socket连接错误:', error);
-            });
-        } catch (error) {
-            console.error('初始化Socket失败:', error);
+            const bsToast = new bootstrap.Toast(toast);
+            bsToast.show();
         }
     </script>
 </body>

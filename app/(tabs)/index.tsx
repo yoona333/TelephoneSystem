@@ -6,14 +6,13 @@ import { useColorScheme } from '@/hooks/useColorScheme';
 import { Colors } from '@/constants/Colors';
 import { Ionicons } from '@expo/vector-icons';
 import CallScreen from '@/components/CallScreen';
-import CallService from '@/services/CallService';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { API_URL } from '@/services/CallService';
+import CallService, { API_URL } from '@/services/CallService';
 import { Stack } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ExpoHaptics from 'expo-haptics';
 import { getPhoneLocation } from '@/services/PhoneLocationService';
 import io from 'socket.io-client';
+import * as Clipboard from 'expo-clipboard';
 
 // 获取屏幕宽度和高度
 const { width, height } = Dimensions.get('window');
@@ -276,6 +275,9 @@ export default function PhoneScreen() {
   // 获取socket连接
   const socketRef = useRef<any>(null);
   
+  // 在PhoneScreen组件顶部声明部分添加一个新变量，用于跟踪挂断过的通话
+  const processedHangupCallIds = useRef(new Set<string>());
+  
   useEffect(() => {
     // 初始化socket连接
     const initSocket = async () => {
@@ -324,31 +326,28 @@ export default function PhoneScreen() {
         
         // 也监听记录全量更新事件
         const handleRecordsUpdated = () => {
-          console.log('收到服务器记录全量更新通知');
-          // 手动调用函数，而不是引用它
-          setLoadingServerRecords(true);
-          CallService.getCallRecords()
-            .then(records => {
-              console.log('获取到最新服务器记录:', records.length, '条');
-              if (records.length > 0) {
-                setCallHistory(prevHistory => {
-                  const merged = mergeWithServerRecords(prevHistory, records);
-                  saveCallHistory(merged);
-                  return merged;
-                });
-              }
-            })
-            .catch(e => console.error('获取服务器记录失败:', e))
-            .finally(() => setLoadingServerRecords(false));
+          console.log('收到服务器记录全量更新通知，立即触发同步...');
+          
+          // 强制重新加载所有记录
+          forceReloadFromServer().catch(err => 
+            console.error('强制更新记录失败:', err)
+          );
         };
         
         // 添加Socket事件监听
         socketRef.current.on('records_updated', handleRecordsUpdated);
         socketRef.current.on('phone_record_update', (data: any) => {
           console.log('收到手机记录更新:', data);
-          if (data.type === 'sync_complete') {
-            handleRecordsUpdated();
-          }
+          // 不论收到什么类型的更新，都强制同步
+          handleRecordsUpdated();
+        });
+        
+        // 监听记录清空事件
+        socketRef.current.on('records_cleared', (data: any) => {
+          console.log('收到服务器记录清空通知:', data);
+          // 立即清空本地记录
+          setCallHistory([]);
+          console.log('已清空本地通话记录');
         });
       } catch (error) {
         console.error('初始化Socket失败:', error);
@@ -365,74 +364,210 @@ export default function PhoneScreen() {
       if (socketRef.current) {
         socketRef.current.off('records_updated');
         socketRef.current.off('phone_record_update');
+        socketRef.current.off('records_cleared');
         socketRef.current.disconnect();
       }
     };
   }, []);
 
-  // 加载通话记录
+  // 应用启动时首先尝试获取服务器的记录
   useEffect(() => {
-    loadCallHistory();
+    // 调用初始加载函数
+    initialLoad().catch(err => {
+      console.error('初始加载调用失败:', err);
+      loadCallHistory(); // 出错时仍然尝试从本地加载
+    });
+  }, []);
+
+  // 初始加载函数
+  const initialLoad = async () => {
+    console.log('执行初始加载...');
+    let retryCount = 0;
+    const maxRetries = 3;
     
-    // 从服务器加载通话记录并合并
-    const loadServerRecords = async () => {
+    const attemptLoad = async () => {
       try {
         setLoadingServerRecords(true);
-        const serverRecords = await CallService.getCallRecords();
         
-        console.log(`从服务器获取到 ${serverRecords.length} 条记录`);
+        // 先检查服务器状态
+        const isServerAvailable = await CallService.checkConnection();
+        if (!isServerAvailable) {
+          console.log('服务器当前不可用，使用本地记录');
+          loadCallHistory();
+          return false;
+        }
         
-        // 确保每条记录都有唯一ID
-        const processedRecords = serverRecords.map(record => {
-          if (!record.id || record.id.trim() === '') {
+        // 尝试从服务器获取最新记录
+        console.log('尝试从服务器直接获取最新记录');
+        const uniqueRecords = await CallService.getUniqueCallRecords();
+        console.log(`从服务器获取到 ${uniqueRecords.length} 条去重后的记录`);
+        
+        // 如果成功获取到记录
+        if (uniqueRecords && uniqueRecords.length > 0) {
+          // 转换记录格式
+          const processedRecords = uniqueRecords.map(record => {
             return {
-              ...record,
-              id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-            };
-          }
-          return record;
-        });
-        
-        // 由于我们现在可能有重复记录，我们需要合并它们
-        setCallHistory(prevHistory => {
-          // 创建一个新的记录数组，确保每条记录都是唯一的
-          const allRecords = [...processedRecords, ...prevHistory];
-          
-          // 使用Map来确保唯一ID
-          const uniqueRecordsMap = new Map<string, CallItem>();
-          
-          // 按时间顺序处理，保证新的记录会覆盖旧的
-          allRecords.forEach(record => {
-            // 如果记录有id，则使用id作为key；否则使用号码+时间作为key
-            const key = record.id || `${record.number}-${record.date}`;
-            uniqueRecordsMap.set(key, record);
+              id: record.id || `${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+              name: '',
+              number: record.number,
+              date: formatDate(new Date(record.date)),
+              type: record.type as 'outgoing' | 'incoming' | 'missed'
+            } as CallItem;
           });
           
-          // 将Map转换回数组
-          const uniqueRecords = Array.from(uniqueRecordsMap.values());
-          
-          // 按日期降序排序
-          const sortedRecords = uniqueRecords.sort((a, b) => 
-            parseDate(b.date).getTime() - parseDate(a.date).getTime()
-          );
-          
-          console.log(`合并后共有 ${sortedRecords.length} 条记录`);
-          
-          // 保存到本地存储并返回
-          saveCallHistory(sortedRecords);
-          return sortedRecords;
-        });
+          // 设置并保存记录
+          setCallHistory(processedRecords);
+          saveCallHistory(processedRecords);
+          console.log(`初始加载成功，从服务器加载了 ${processedRecords.length} 条记录`);
+          return true;
+        } else {
+          // 如果没有获取到记录，尝试加载本地记录
+          console.log('服务器没有记录，尝试加载本地记录');
+          loadCallHistory();
+          return true;
+        }
       } catch (error) {
-        console.error('加载服务器记录失败:', error);
-        Alert.alert('提示', '从服务器加载通话记录失败，将使用本地记录');
+        console.error(`初始加载失败 (尝试 ${retryCount + 1}/${maxRetries}):`, error);
+        
+        if (retryCount < maxRetries - 1) {
+          retryCount++;
+          console.log(`${retryCount}秒后重试...`);
+          await new Promise(resolve => setTimeout(resolve, retryCount * 1000));
+          return false;
+        } else {
+          // 最后尝试失败后，加载本地记录
+          console.log('重试次数已用完，回退到本地记录');
+          loadCallHistory();
+          return true;
+        }
       } finally {
         setLoadingServerRecords(false);
       }
     };
     
-    loadServerRecords();
-  }, []);
-  
+    // 开始重试循环
+    let success = false;
+    while (!success && retryCount < maxRetries) {
+      success = await attemptLoad();
+    }
+  };
+
+  // 强制从服务器重新加载全部记录
+  const forceReloadFromServer = async () => {
+    try {
+      console.log('强制从服务器重新加载记录...');
+      setLoadingServerRecords(true);
+      
+      // 不显示弹窗，静默执行
+      console.log('开始强制从服务器获取所有记录');
+      
+      // 先检查服务器连接
+      const isConnected = await CallService.checkConnection();
+      if (!isConnected) {
+        console.log('服务器连接失败，无法强制同步');
+        // 静默处理失败情况
+        return;
+      }
+      
+      // 直接调用去重方法获取记录
+      const uniqueRecords = await CallService.getUniqueCallRecords();
+      console.log(`获取到 ${uniqueRecords.length} 条去重后的记录`);
+      
+      if (uniqueRecords.length > 0) {
+        // 转换服务器记录格式
+        const processedRecords = uniqueRecords.map(record => {
+          return {
+            id: record.id || `${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+            name: '',
+            number: record.number,
+            date: formatDate(new Date(record.date)),
+            type: record.type as 'outgoing' | 'incoming' | 'missed'
+          } as CallItem;
+        });
+        
+        // 替换本地记录
+        setCallHistory(processedRecords);
+        // 无需保存到本地
+        
+        console.log(`已从服务器加载 ${processedRecords.length} 条记录`);
+      } else {
+        // 如果服务器上没有记录，清空本地记录
+        console.log('服务器上没有通话记录，清空本地记录');
+        setCallHistory([]);
+      }
+    } catch (error: any) {
+      console.error('强制加载服务器记录失败:', error);
+      
+      // 静默处理错误，只记录日志
+      if (error.message && error.message.includes('502')) {
+        console.log('服务器返回502错误，可能正在休眠');
+        // 静默尝试唤醒服务器
+        wakeupServerSilent();
+      } else {
+        console.log('无法从服务器获取记录，请检查网络连接');
+      }
+    } finally {
+      setLoadingServerRecords(false);
+    }
+  };
+
+  // 添加静默唤醒服务器函数
+  const wakeupServerSilent = async () => {
+    if (checkingServer) return;
+    
+    try {
+      setCheckingServer(true);
+      console.log('静默唤醒服务器...');
+      
+      // 先做一个简单的状态检查请求
+      const statusCheck = await fetch(`${API_URL}/api/status`, { 
+        method: 'GET',
+        headers: { 'Cache-Control': 'no-cache' }
+      }).catch(() => null);
+      
+      if (statusCheck && statusCheck.ok) {
+        console.log('服务器已经在线，无需唤醒');
+        setServerAwake(true);
+        return;
+      }
+      
+      // 执行多次请求唤醒服务器
+      for (let i = 0; i < 5; i++) {
+        console.log(`唤醒尝试 ${i+1}/5...`);
+        
+        try {
+          const response = await fetch(`${API_URL}/api/status`, {
+            method: 'GET',
+            headers: { 'Cache-Control': 'no-cache' }
+          });
+          
+          if (response.ok) {
+            console.log('服务器已唤醒！');
+            setServerAwake(true);
+            
+            // 成功唤醒后静默重新加载记录
+            setTimeout(() => {
+              forceReloadFromServer().catch(err => console.error('重新加载记录失败:', err));
+            }, 3000);
+            
+            return;
+          }
+        } catch (error) {
+          console.log(`尝试 ${i+1} 失败，等待重试...`);
+        }
+        
+        // 等待3秒后再尝试
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+      
+      console.log('唤醒服务器失败，可能处于维护状态');
+    } catch (error) {
+      console.error('唤醒服务器出错:', error);
+    } finally {
+      setCheckingServer(false);
+    }
+  };
+
   // 合并服务器记录到本地记录
   const mergeServerRecords = (serverRecords: any[]) => {
     // 获取当前本地记录
@@ -537,18 +672,59 @@ export default function PhoneScreen() {
       const success = await CallService.syncCallRecords(callHistory);
       
       if (success) {
-        console.log('通话记录同步成功');
+        console.log('通话记录同步成功，立即强制更新本地记录');
         
-        // 获取最新的服务器记录并更新本地
-        const serverRecords = await CallService.getCallRecords();
-        if (serverRecords && serverRecords.length > 0) {
-          mergeServerRecords(serverRecords);
-        }
+        // 强制获取全部服务器记录
+        await forceReloadFromServer();
       }
     } catch (error) {
       console.error('同步通话记录失败:', error);
     }
   };
+
+  // 完全重写通话记录管理逻辑
+  useEffect(() => {
+    // 创建一个全局的已处理通话ID集合，确保每个通话只处理一次
+    const processedCallIds = new Set<string>();
+    
+    const handleCallStatus = (data: any) => {
+      console.log('通话状态更新:', data);
+      
+      // 只在通话结束时添加记录
+      if (data.status === 'ended' && data.phoneNumber && data.callId) {
+        // 检查这个通话ID是否已经处理过
+        if (processedCallIds.has(data.callId)) {
+          console.log('忽略已处理的通话ID:', data.callId);
+          return;
+        }
+        
+        // 标记为已处理，设置一个唯一的组合键，包含状态
+        const callKey = `${data.callId}-${data.status}`;
+        processedCallIds.add(callKey);
+        
+        // 延迟5秒后从集合中删除，避免长期占用内存
+        setTimeout(() => {
+          processedCallIds.delete(callKey);
+        }, 5000);
+        
+        // 不再立即添加记录，而是延迟一段时间后直接从服务器获取最新记录
+        console.log('通话已结束，5秒后将从服务器获取更新的记录');
+        setTimeout(() => {
+          forceReloadFromServer().catch(err => {
+            console.error('获取服务器记录失败:', err);
+          });
+        }, 5000);
+      }
+    };
+    
+    // 添加监听器
+    CallService.subscribeToCallStatus(handleCallStatus);
+    
+    // 清理函数
+    return () => {
+      CallService.unsubscribeFromCallStatus(handleCallStatus);
+    };
+  }, [callHistory]); // 依赖callHistory以获取最新状态
 
   // 在通话结束后同步记录
   useEffect(() => {
@@ -556,15 +732,33 @@ export default function PhoneScreen() {
       if (!data) return;
       
       // 只在通话结束时处理
-      if (data.status === 'ended' && data.phoneNumber) {
-        // 延迟2秒再同步，确保服务器有时间保存记录
+      if (data.status === 'ended' && data.phoneNumber && data.callId) {
+        // 检查这个callId是否已经处理过挂断
+        if (processedHangupCallIds.current.has(data.callId)) {
+          console.log(`通话 ${data.callId} 已处理过挂断，忽略重复事件`);
+          return;
+        }
+        
+        // 添加到已处理集合
+        processedHangupCallIds.current.add(data.callId);
+        
+        // 设置定时器，60秒后从集合中删除，允许将来同一callId再次处理
+        setTimeout(() => {
+          processedHangupCallIds.current.delete(data.callId);
+          console.log(`通话 ${data.callId} 的处理锁定已释放`);
+        }, 60000); // 从30秒增加到60秒，确保有足够时间去重
+        
+        // 延迟3秒再同步，确保服务器有时间保存记录，并且避免和其他请求冲突
         setTimeout(() => {
           try {
-            syncRecordsWithServer();
+            // 不再调用syncRecordsWithServer，直接使用forceReloadFromServer
+            // 确保每次都从服务器获取完整记录，而不是尝试同步本地记录
+            forceReloadFromServer();
+            console.log(`通话 ${data.callId} 结束后已触发记录同步`);
           } catch (error) {
             console.error('通话结束后同步记录失败:', error);
           }
-        }, 2000);
+        }, 3000); // 从2秒增加到3秒
       }
     };
     
@@ -584,24 +778,47 @@ export default function PhoneScreen() {
     };
   }, [callHistory]);
 
-  // 从 AsyncStorage 加载通话记录
+  // 移除本地存储，改为每次从服务器获取
   const loadCallHistory = async () => {
     try {
-      const storedHistory = await AsyncStorage.getItem(CALL_HISTORY_STORAGE_KEY);
-      if (storedHistory) {
-        setCallHistory(JSON.parse(storedHistory));
+      // 尝试从服务器获取记录
+      console.log('尝试从服务器直接加载记录');
+      const records = await CallService.getUniqueCallRecords();
+      
+      if (records && records.length > 0) {
+        // 转换服务器记录格式
+        const processedRecords = records.map(record => {
+          return {
+            id: record.id || `${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+            name: '',
+            number: record.number,
+            date: formatDate(new Date(record.date)),
+            type: record.type as 'outgoing' | 'incoming' | 'missed'
+          } as CallItem;
+        });
+        
+        setCallHistory(processedRecords);
+        console.log(`已加载 ${processedRecords.length} 条记录`);
+      } else {
+        // 如果服务器没有记录，清空本地记录
+        console.log('服务器上没有记录，清空本地记录');
+        setCallHistory([]);
       }
     } catch (error) {
       console.error('加载通话记录失败:', error);
+      // 出错时设置为空数组
+      setCallHistory([]);
     }
   };
 
-  // 保存通话记录到 AsyncStorage
+  // 修改为直接同步到服务器而不保存本地
   const saveCallHistory = async (history: CallItem[]) => {
     try {
-      await AsyncStorage.setItem(CALL_HISTORY_STORAGE_KEY, JSON.stringify(history));
+      // 直接同步到服务器
+      console.log('同步记录到服务器...');
+      await CallService.syncCallRecords(history);
     } catch (error) {
-      console.error('保存通话记录失败:', error);
+      console.error('同步通话记录到服务器失败:', error);
     }
   };
 
@@ -640,8 +857,7 @@ export default function PhoneScreen() {
       }
 
       const updated = [newCall, ...prevHistory];
-      // 本地存储
-      saveCallHistory(updated);
+      
       // 立即同步到服务器
       setTimeout(() => {
         CallService.syncCallRecords(updated)
@@ -651,7 +867,6 @@ export default function PhoneScreen() {
             if (serverRecords.length > 0) {
               setCallHistory(current => {
                 const merged = mergeWithServerRecords(current, serverRecords);
-                saveCallHistory(merged);
                 return merged;
               });
             }
@@ -731,49 +946,6 @@ export default function PhoneScreen() {
     }
   };
 
-  // 完全重写通话记录管理逻辑
-  useEffect(() => {
-    // 创建一个全局的已处理通话ID集合，确保每个通话只处理一次
-    const processedCallIds = new Set<string>();
-    
-    const handleCallStatus = (data: any) => {
-      console.log('通话状态更新:', data);
-      
-      // 只在通话结束时添加记录
-      if (data.status === 'ended' && data.phoneNumber && data.callId) {
-        // 检查这个通话ID是否已经处理过
-        if (processedCallIds.has(data.callId)) {
-          console.log('忽略已处理的通话ID:', data.callId);
-          return;
-        }
-        
-        // 标记为已处理
-        processedCallIds.add(data.callId);
-        
-        // 检查最近30秒内是否已经有相同号码的记录
-        const recentCallExists = callHistory.some(call => 
-          call.number === data.phoneNumber && 
-          isWithinLastSeconds(parseDate(call.date), 30)
-        );
-        
-        if (!recentCallExists) {
-          console.log('添加新通话记录:', data.phoneNumber);
-          addCallRecord(data.phoneNumber, 'outgoing');
-        } else {
-          console.log('跳过添加重复号码记录:', data.phoneNumber);
-        }
-      }
-    };
-    
-    // 添加监听器
-    CallService.subscribeToCallStatus(handleCallStatus);
-    
-    // 清理函数
-    return () => {
-      CallService.unsubscribeFromCallStatus(handleCallStatus);
-    };
-  }, [callHistory]); // 依赖callHistory以获取最新状态
-
   // 过滤通话记录
   const filteredCalls = activeTab === 'all' 
     ? callHistory 
@@ -818,6 +990,20 @@ export default function PhoneScreen() {
       return;
     }
     
+    // 检查是否有短时间内的重复拨打
+    if (throttleFlag.current) {
+      console.log('短时间内重复点击拨打按钮，忽略本次调用');
+      return;
+    }
+    
+    // 设置节流标记
+    throttleFlag.current = true;
+    
+    // 5秒后重置节流标记
+    setTimeout(() => {
+      throttleFlag.current = false;
+    }, 5000); // 从3秒增加到5秒
+    
     try {
       // 先更新UI状态
       setPhoneNumber(number);
@@ -836,13 +1022,20 @@ export default function PhoneScreen() {
       
       if (response && response.callId) {
         console.log('拨打成功，callId:', response.callId);
+        // 更新callData前，确保之前的callData被清理
+        if (callData?.callId && callData.callId !== response.callId) {
+          console.log('清理之前的通话状态:', callData.callId);
+        }
+        
         setCallData(response);
         setCallActive(true);
+        
+        // 不要在这里添加记录，记录会由服务器生成并通过socket推送
       }
     } catch (error) {
       console.error('拨打电话失败:', error);
-      // 如果拨打失败，添加未接通记录
-      addCallRecord(number, 'missed');
+      // 如果拨打失败，也不直接添加记录
+      throttleFlag.current = false; // 立即重置节流标记
     }
   };
 
@@ -873,15 +1066,15 @@ export default function PhoneScreen() {
     try {
       console.log('开始清空所有通话记录...');
       
-      // 清空本地记录
+      // 清空本地状态
       setCallHistory([]);
-      await AsyncStorage.setItem(CALL_HISTORY_STORAGE_KEY, JSON.stringify([]));
+      console.log('本地通话记录已清空');
       
       // 调用服务方法清空服务器记录
       const success = await CallService.clearCallRecords();
       
       if (success) {
-        console.log('服务器和本地通话记录已全部清空');
+        console.log('服务器通话记录已全部清空，清空结果:', success);
         // 重置最后同步时间
         setLastSyncTime(null);
         
@@ -890,7 +1083,7 @@ export default function PhoneScreen() {
           ExpoHaptics.impactAsync(ExpoHaptics.ImpactFeedbackStyle.Medium);
         }
       } else {
-        console.error('清空服务器记录失败');
+        console.error('清空服务器记录失败，尝试直接调用API');
         // 尝试直接调用API
         try {
           const response = await fetch(`${API_URL}/api/clear-history`, {
@@ -1106,7 +1299,7 @@ export default function PhoneScreen() {
     initialSync();
   }, []);
   
-  // 自动同步功能
+  // 自动同步功能 - 修改为强制同步
   const autoSyncWithServer = async () => {
     try {
       // 检查是否有网络连接
@@ -1116,20 +1309,37 @@ export default function PhoneScreen() {
         return;
       }
       
-      console.log('执行自动同步...');
+      console.log('执行强制自动同步...');
       setIsSyncing(true);
       
-      // 获取服务器记录
-      const serverRecords = await CallService.getCallRecords();
+      // 不再使用本地存储的同步时间
+      console.log('直接从服务器获取所有记录');
       
-      if (serverRecords && serverRecords.length > 0) {
-        console.log(`从服务器获取了 ${serverRecords.length} 条通话记录`);
-        mergeServerRecords(serverRecords);
+      // 直接使用去重方法获取记录
+      const uniqueRecords = await CallService.getUniqueCallRecords();
+      console.log(`获取到 ${uniqueRecords.length} 条去重后的记录`);
+      
+      if (uniqueRecords.length > 0) {
+        // 转换服务器记录格式
+        const processedRecords = uniqueRecords.map(record => {
+          return {
+            id: record.id || `${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+            name: '',
+            number: record.number,
+            date: formatDate(new Date(record.date)),
+            type: record.type as 'outgoing' | 'incoming' | 'missed'
+          } as CallItem;
+        });
         
-        // 同步本地记录到服务器
-        await CallService.syncCallRecords(callHistory);
+        // 替换本地记录
+        setCallHistory(processedRecords);
+        // 不再保存到本地存储
         
-        console.log('自动同步完成');
+        console.log(`自动同步完成，获取了 ${processedRecords.length} 条记录`);
+      } else {
+        // 如果服务器上没有记录，清空本地记录
+        console.log('服务器上没有记录，清空本地记录');
+        setCallHistory([]);
       }
     } catch (error) {
       console.error('自动同步失败:', error);
@@ -1143,7 +1353,7 @@ export default function PhoneScreen() {
     {
       id: 'paste',
       label: '粘贴',
-      icon: 'clipboard-outline'
+      icon: 'copy-outline'
     },
     {
       id: 'record',
@@ -1151,13 +1361,13 @@ export default function PhoneScreen() {
       icon: 'mic-outline'
     },
     {
-      id: 'batchDelete',
+      id: 'delete',
       label: '批量删除',
       icon: 'trash-outline'
     },
     {
-      id: 'block',
-      label: '强拉拦截',
+      id: 'intercept',
+      label: '强制拦截',
       icon: 'shield-outline'
     },
     {
@@ -1173,32 +1383,21 @@ export default function PhoneScreen() {
     
     switch (id) {
       case 'paste':
-        // 处理粘贴操作
-        // 这里可以添加从剪贴板获取号码的功能
-        Alert.alert('提示', '粘贴功能暂未实现');
+        pastePhoneNumber();
         break;
       case 'record':
-        // 处理通话录音
-        Alert.alert('提示', '通话录音功能暂未实现');
+        console.log('通话录音功能不可用');
         break;
-      case 'batchDelete':
-        // 批量删除功能
-        Alert.alert(
-          '确认删除',
-          '是否清空通话记录？',
-          [
-            { text: '取消', style: 'cancel' },
-            { text: '确认', onPress: clearCallHistory }
-          ]
-        );
+      case 'delete':
+        confirmClearCallHistory();
         break;
-      case 'block':
-        // 强拉拦截
-        Alert.alert('提示', '强拉拦截功能暂未实现');
+      case 'intercept':
+        console.log('强制拦截功能不可用');
         break;
       case 'settings':
-        // 设置页面跳转
-        Alert.alert('提示', '设置页面暂未实现');
+        console.log('设置功能不可用');
+        break;
+      default:
         break;
     }
   };
@@ -1228,13 +1427,50 @@ export default function PhoneScreen() {
     const checkServer = async () => {
       setCheckingServer(true);
       try {
-        const response = await fetch(`${API_URL}/api/status`, {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json' }
-        });
-        setServerAwake(response.ok);
+        // 尝试3次
+        for (let i = 0; i < 3; i++) {
+          try {
+            console.log(`检查服务器状态 (尝试 ${i+1}/3)...`);
+            const response = await fetch(`${API_URL}/api/status`, {
+              method: 'GET',
+              headers: { 
+                'Content-Type': 'application/json',
+                'Cache-Control': 'no-cache'
+              }
+            });
+            
+            if (response.ok) {
+              console.log('服务器状态正常');
+              setServerAwake(true);
+              break;
+            }
+          } catch (error) {
+            console.log(`服务器检查失败 (尝试 ${i+1})`, error);
+            
+            // 最后一次尝试失败时
+            if (i === 2) {
+              console.log('所有服务器检查尝试失败');
+              setServerAwake(false);
+              
+              // 自动尝试一次唤醒
+              setTimeout(() => {
+                // 静默尝试唤醒，不显示UI提示
+                console.log('自动尝试唤醒服务器...');
+                fetch(`${API_URL}/api/status`, {
+                  method: 'GET',
+                  headers: { 'Cache-Control': 'no-cache' }
+                }).catch(() => console.log('自动唤醒尝试失败'));
+              }, 2000);
+            }
+          }
+          
+          // 等待1秒再尝试
+          if (i < 2) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
       } catch (error) {
-        console.log('服务器可能在睡眠中');
+        console.error('检查服务器状态时出错:', error);
         setServerAwake(false);
       } finally {
         setCheckingServer(false);
@@ -1351,6 +1587,103 @@ export default function PhoneScreen() {
     }
   };
 
+  // 从剪贴板粘贴电话号码
+  const pastePhoneNumber = async () => {
+    try {
+      // 使用Clipboard API获取剪贴板内容
+      const content = await Clipboard.getStringAsync();
+      
+      // 检查是否是有效的电话号码（简单验证）
+      const phoneRegex = /^1\d{10}$|^\d{3,4}-\d{7,8}$|^\d{7,11}$/;
+      
+      if (content && phoneRegex.test(content.trim())) {
+        // 设置电话号码（去除空格）
+        const cleanNumber = content.trim().replace(/\s+/g, '');
+        setPhoneNumber(cleanNumber);
+        
+        // 显示拨号盘
+        toggleDialPad(true);
+        
+        // 给予用户反馈
+        if (Platform.OS === 'ios') {
+          ExpoHaptics.notificationAsync(ExpoHaptics.NotificationFeedbackType.Success);
+        }
+      } else {
+        console.log('剪贴板中没有有效的电话号码');
+      }
+    } catch (error) {
+      console.error('从剪贴板粘贴电话号码失败:', error);
+    }
+  };
+  
+  // 确认清空通话记录
+  const confirmClearCallHistory = () => {
+    // 直接调用清空方法，不再询问确认
+    clearCallHistory();
+  };
+
+  // 修改手动唤醒服务器函数，移除弹窗
+  const wakeupServer = async () => {
+    if (checkingServer) return;
+    
+    try {
+      setCheckingServer(true);
+      console.log('开始唤醒服务器...');
+      
+      // 先做一个简单的状态检查请求
+      const statusCheck = await fetch(`${API_URL}/api/status`, { 
+        method: 'GET',
+        headers: { 'Cache-Control': 'no-cache' }
+      }).catch(() => null);
+      
+      if (statusCheck && statusCheck.ok) {
+        console.log('服务器已经在线，无需唤醒');
+        setServerAwake(true);
+        return;
+      }
+      
+      // 执行多次请求唤醒服务器
+      let success = false;
+      for (let i = 0; i < 5; i++) {
+        console.log(`唤醒尝试 ${i+1}/5...`);
+        
+        try {
+          const response = await fetch(`${API_URL}/api/status`, {
+            method: 'GET',
+            headers: { 'Cache-Control': 'no-cache' }
+          });
+          
+          if (response.ok) {
+            console.log('服务器已唤醒！');
+            success = true;
+            break;
+          }
+        } catch (error) {
+          console.log(`尝试 ${i+1} 失败，等待重试...`);
+        }
+        
+        // 等待6秒后再尝试
+        await new Promise(resolve => setTimeout(resolve, 6000));
+      }
+      
+      if (success) {
+        setServerAwake(true);
+        console.log('服务器已成功唤醒，现在开始重新加载记录');
+        
+        // 自动尝试重新加载记录
+        setTimeout(() => {
+          forceReloadFromServer().catch(err => console.error('重新加载记录失败:', err));
+        }, 3000);
+      } else {
+        console.log('唤醒服务器失败，可能处于维护状态');
+      }
+    } catch (error) {
+      console.error('唤醒服务器出错:', error);
+    } finally {
+      setCheckingServer(false);
+    }
+  };
+
   return (
     <>
       <Stack.Screen
@@ -1365,13 +1698,15 @@ export default function PhoneScreen() {
             fontWeight: 'bold',
           },
           headerRight: () => (
-            <TouchableOpacity 
-              style={styles.menuButton}
-              onPress={() => setMenuVisible(!menuVisible)}
-              hitSlop={{ top: 15, right: 15, bottom: 15, left: 15 }}
-            >
-              <FourDots />
-            </TouchableOpacity>
+            <View style={{flexDirection: 'row', alignItems: 'center'}}>
+              <TouchableOpacity 
+                style={styles.menuButton}
+                onPress={() => setMenuVisible(!menuVisible)}
+                hitSlop={{ top: 15, right: 15, bottom: 15, left: 15 }}
+              >
+                <FourDots />
+              </TouchableOpacity>
+            </View>
           ),
           headerLeft: () => null,
         }}
@@ -1485,18 +1820,24 @@ export default function PhoneScreen() {
             onHangup={handleHangup}
           />
         </Modal>
-        
-        {/* 在UI中显示状态 */}
-        {!serverAwake && (
-          <View style={styles.serverSleepingBanner}>
-            <Text style={styles.serverSleepingText}>
-              {checkingServer ? '正在连接服务器...' : '服务器正在唤醒中，首次连接可能较慢'}
-            </Text>
-          </View>
-        )}
       </ThemedView>
     </>
   );
+
+  // 增强自动同步能力，增加定期后台同步
+  useEffect(() => {
+    // 应用启动时执行一次同步
+    autoSyncWithServer();
+    
+    // 设置定期自动同步（每60秒同步一次）
+    const syncInterval = setInterval(() => {
+      console.log('执行定期自动同步...');
+      autoSyncWithServer();
+    }, 60000);
+    
+    // 清理定时器
+    return () => clearInterval(syncInterval);
+  }, []);
 }
 
 // 更新样式，更接近图片风格
@@ -1772,15 +2113,19 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
     padding: 10,
     zIndex: 1000,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   serverSleepingText: {
     color: 'white',
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: 'bold',
-    textAlign: 'center',
+    flex: 1,
+    marginRight: 10,
   },
   iconContainer: {
     width: 24,
@@ -1835,5 +2180,16 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#999',
     textAlign: 'center',
+  },
+  wakeupButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#007AFF',
+    borderRadius: 5,
+  },
+  wakeupButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: 'bold',
   },
 });
