@@ -7,82 +7,48 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>通话管理系统</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {
             font-family: 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
             margin: 0;
-            padding: 20px;
-            background-color: black;
+            padding: 0;
+            background-color: #000;
             color: white;
+        }
+        .container {
+            padding: 20px;
+            max-width: 100%;
         }
         h2 {
             color: white;
             text-align: center;
-            margin-bottom: 20px;
+            margin: 20px 0;
             font-size: 24px;
-        }
-        h3 {
-            color: white;
-            margin-bottom: 15px;
-            font-size: 20px;
-        }
-        .header-container {
-            position: relative;
-            margin-bottom: 20px;
+            font-weight: normal;
         }
         .clear-btn {
-            padding: 6px 12px;
             background-color: #dc3545;
             color: white;
             border: none;
             border-radius: 4px;
+            padding: 5px 10px;
             cursor: pointer;
             position: absolute;
-            top: 0;
-            right: 0;
+            top: 20px;
+            right: 20px;
         }
-        .table {
+        table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 15px;
-            color: white;
+            margin-top: 20px;
         }
-        .table th, .table td {
-            padding: 8px;
+        th, td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #333;
             text-align: left;
-            border-bottom: 1px solid #555;
         }
-        .table tr:hover {
-            background-color: #333;
-        }
-        .badge {
-            padding: 3px 6px;
-            border-radius: 3px;
-            font-size: 12px;
-        }
-        .bg-info { background-color: #17a2b8; color: white; }
-        .bg-warning { background-color: #ffc107; color: #000; }
-        .bg-success { background-color: #28a745; color: white; }
-        .bg-danger { background-color: #dc3545; color: white; }
-        .bg-secondary { background-color: #6c757d; color: white; }
-        .card {
-            background-color: #333;
-            border: 1px solid #555;
-            border-radius: 4px;
-            margin-bottom: 15px;
-        }
-        .card-body {
-            padding: 15px;
-        }
-        .card-title {
-            margin-bottom: 10px;
-        }
-        .card-text {
-            margin-bottom: 5px;
-        }
-        .btn-group {
-            margin-top: 10px;
+        th {
+            color: #fff;
         }
         .btn {
             padding: 5px 10px;
@@ -92,7 +58,7 @@
             margin-right: 5px;
         }
         .btn-success {
-            background-color: #28a745;
+            background-color: #007bff;
             color: white;
         }
         .btn-danger {
@@ -103,62 +69,27 @@
 </head>
 <body>
     <div class="container">
-        <div class="header-container">
-            <h2>通话管理系统</h2>
-            <button class="clear-btn" onclick="clearCallHistory()">清空</button>
-        </div>
-
-        <!-- 连接状态 -->
-        <div id="statusArea" class="alert alert-info mb-3 text-center">
-            正在连接服务器...
-        </div>
-
-        <!-- 新来电提示 -->
-        <div id="callAlert" class="alert alert-warning d-none mb-3 text-center">
-        </div>
-
-        <!-- 活跃通话区域 -->
-        <div id="activeCallsSection" class="mb-4 d-none">
-            <h3>活跃通话</h3>
-            <div id="activeCallsContainer"></div>
-        </div>
-
-        <!-- 通话记录区域 -->
-        <div class="mt-4">
-            <h3>通话记录 <span id="recordCount">0</span> 条</h3>
-            <div>
-                <table class="table">
-                    <thead>
-                        <tr>
-                            <th>电话号码</th>
-                            <th>状态</th>
-                            <th>时间</th>
-                            <th>时长</th>
-                        </tr>
-                    </thead>
-                    <tbody id="callRecordsTable">
-                        <tr>
-                            <td colspan="4" class="text-center">加载中...</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Toast 消息 -->
-        <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
-            <div id="toastElement" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
-                <div class="toast-header">
-                    <strong class="me-auto">通知</strong>
-                    <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
-                </div>
-                <div class="toast-body" id="toastBody"></div>
-            </div>
-        </div>
+        <h2>通话管理系统</h2>
+        <button class="clear-btn" onclick="clearCallHistory()">清空</button>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>电话</th>
+                    <th>时间</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody id="callRecordsTable">
+                <tr>
+                    <td colspan="4" style="text-align: center;">加载中...</td>
+                </tr>
+            </tbody>
+        </table>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         // DOM 元素引用
         let elements = {};
@@ -167,236 +98,71 @@
         function initApp() {
             console.log('初始化应用...');
             
-            // 确保所有脚本加载完成
-            if (!window.bootstrap || !window.io) {
+            // 确保socket.io已加载
+            if (typeof io === 'undefined') {
                 console.log('等待必要的脚本加载...');
                 setTimeout(initApp, 1000);
                 return;
             }
             
-            // 获取所有 DOM 元素引用
+            // 获取DOM元素
             elements = {
-                statusArea: document.getElementById('statusArea'),
-                callAlert: document.getElementById('callAlert'),
-                activeCallsSection: document.getElementById('activeCallsSection'),
-                activeCallsContainer: document.getElementById('activeCallsContainer'),
-                callRecordsTable: document.getElementById('callRecordsTable'),
-                recordCount: document.getElementById('recordCount'),
-                toastElement: document.getElementById('toastElement'),
-                toastBody: document.getElementById('toastBody')
+                callRecordsTable: document.getElementById('callRecordsTable')
             };
             
-            // 检查必要元素是否存在
-            let missingElements = [];
-            for (const [key, element] of Object.entries(elements)) {
-                if (!element) {
-                    missingElements.push(key);
-                    console.error(`找不到必要的DOM元素: ${key}`);
-                }
-            }
-            
-            if (missingElements.length > 0) {
-                console.error('缺失的元素:', missingElements);
-                // 尝试重新创建缺失的元素
-                recreateMissingElements(missingElements);
-                // 延迟重试初始化
-                setTimeout(() => {
-                    console.log('尝试重新初始化...');
-                    initApp();
-                }, 1000);
-                return false;
-            }
-            
-            // 初始化 Socket 连接
+            // 初始化Socket连接
             try {
                 initSocketConnection();
             } catch (error) {
-                console.error('Socket 连接初始化失败:', error);
-                showStatus('服务器连接失败', 'danger');
+                console.error('Socket连接初始化失败:', error);
+                showError('服务器连接失败');
             }
             
-            // 延迟加载通话记录
-            setTimeout(loadCallRecords, 2000);
+            // 加载通话记录
+            setTimeout(loadCallRecords, 1000);
             
-            // 设置自动刷新 - 减少频率避免过多请求
+            // 设置定时刷新
             setInterval(loadCallRecords, 30000);
-            
-            return true;
         }
         
-        // 重新创建缺失的元素
-        function recreateMissingElements(missingElements) {
-            const container = document.querySelector('.container');
-            if (!container) return;
-
-            missingElements.forEach(elementId => {
-                if (!document.getElementById(elementId)) {
-                    switch(elementId) {
-                        case 'callRecordsTable':
-                            const tableBody = document.createElement('tbody');
-                            tableBody.id = 'callRecordsTable';
-                            const table = document.querySelector('.table');
-                            if (table) {
-                                const existingBody = table.querySelector('tbody');
-                                if (existingBody) {
-                                    existingBody.replaceWith(tableBody);
-                                } else {
-                                    table.appendChild(tableBody);
-                                }
-                            }
-                            break;
-                        case 'recordCount':
-                            const span = document.createElement('span');
-                            span.id = 'recordCount';
-                            span.textContent = '0';
-                            const h3 = document.querySelector('h3');
-                            if (h3) {
-                                h3.appendChild(span);
-                            }
-                            break;
-                        // 添加其他元素的处理...
-                    }
-                }
-            });
-        }
-        
-        // 初始化 Socket 连接
+        // 初始化Socket连接
         function initSocketConnection() {
-            try {
-                // 设置基础URL - 适应不同环境
-                const baseUrl = 'https://telephonesystem.onrender.com';
-                console.log(`正在连接Socket.io: ${baseUrl}`);
-                
-                // 确保socket.io已加载
-                if (typeof io === 'undefined') {
-                    console.error('Socket.io未加载，等待加载完成...');
-                    setTimeout(initSocketConnection, 1000);
-                    return null;
-                }
-                
-                // 创建Socket连接
-                const socket = io(baseUrl, {
-                    reconnectionAttempts: 5,
-                    timeout: 10000,
-                    transports: ['websocket', 'polling'],
-                    forceNew: true,
-                    reconnection: true,
-                    reconnectionDelay: 1000,
-                    reconnectionDelayMax: 5000,
-                    autoConnect: true
-                });
-                
-                // 连接成功
-                socket.on('connect', () => {
-                    console.log('Socket 已连接，ID:', socket.id);
-                    showStatus('服务器已连接', 'success');
-                    
-                    // 订阅通话状态更新
-                    socket.emit('subscribe', { type: 'call_status' });
-                    
-                    // 连接后立即加载记录
-                    loadCallRecords();
-                });
-                
-                // 连接错误
-                socket.on('connect_error', (error) => {
-                    console.error('Socket 连接错误:', error);
-                    showStatus('服务器连接错误: ' + error.message, 'danger');
-                    // 即使Socket连接失败，也尝试加载记录
-                    setTimeout(loadCallRecords, 2000);
-                });
-                
-                // 重连尝试
-                socket.on('reconnect_attempt', (attemptNumber) => {
-                    console.log(`Socket 正在尝试第 ${attemptNumber} 次重连...`);
-                    showStatus('正在重新连接服务器...', 'warning');
-                });
-                
-                // 重连成功
-                socket.on('reconnect', (attemptNumber) => {
-                    console.log(`Socket 重连成功，尝试次数: ${attemptNumber}`);
-                    showStatus('服务器已重新连接', 'success');
-                    loadCallRecords();
-                });
-                
-                // 欢迎消息
-                socket.on('welcome', (data) => {
-                    console.log('服务器欢迎消息:', data);
-                    showStatus('服务器已连接', 'success');
-                });
-                
-                // 通话状态更新
-                socket.on('call_status', (data) => {
-                    console.log('收到通话状态更新:', data);
-                    
-                    if (data.status === 'ringing') {
-                        showCallAlert(`有新来电：${data.phoneNumber}`, true);
-                        playSound('ring.mp3');
-                        showNotification('新来电', `来自 ${data.phoneNumber} 的新来电`);
-                    } else if (data.status === 'ended') {
-                        showCallAlert('', false);
-                        playSound('end.mp3');
-                        showNotification('通话结束', `与 ${data.phoneNumber} 的通话已结束`);
-                    }
-                    
-                    // 刷新记录
-                    setTimeout(loadCallRecords, 1000);
-                });
-                
-                // 记录更新
-                socket.on('call_record_update', () => {
-                    console.log('收到记录更新通知');
-                    setTimeout(loadCallRecords, 1000);
-                });
-                
-                // 所有记录更新
-                socket.on('records_updated', () => {
-                    console.log('收到所有记录更新通知');
-                    setTimeout(loadCallRecords, 1000);
-                });
-                
-                // 连接错误
-                socket.on('error', (error) => {
-                    console.error('Socket 错误:', error);
-                    showStatus('服务器连接错误', 'danger');
-                });
-                
-                // 断开连接
-                socket.on('disconnect', (reason) => {
-                    console.log('Socket 断开连接:', reason);
-                    showStatus('服务器已断开', 'danger');
-                });
-                
-                return socket;
-            } catch (error) {
-                console.error('创建Socket连接失败:', error);
-                showStatus('服务器连接失败: ' + error.message, 'danger');
-                // 即使Socket连接失败，也尝试加载记录
-                setTimeout(loadCallRecords, 2000);
-                return null;
-            }
+            const baseUrl = 'https://telephonesystem.onrender.com';
+            console.log(`正在连接Socket.io: ${baseUrl}`);
+            
+            const socket = io(baseUrl, {
+                reconnectionAttempts: 5,
+                timeout: 10000,
+                transports: ['websocket', 'polling'],
+                forceNew: true
+            });
+            
+            socket.on('connect', () => {
+                console.log('Socket已连接');
+                loadCallRecords();
+            });
+            
+            socket.on('call_status', (data) => {
+                console.log('收到通话状态更新:', data);
+                setTimeout(loadCallRecords, 1000);
+            });
+            
+            socket.on('records_updated', () => {
+                setTimeout(loadCallRecords, 1000);
+            });
+            
+            return socket;
         }
         
-        // 显示状态信息
-        function showStatus(message, type = 'info') {
-            const statusEl = elements.statusArea || document.getElementById('statusArea');
-            if (statusEl) {
-                statusEl.textContent = message;
-                statusEl.className = `alert alert-${type} mb-3 text-center`;
-            } else {
-                console.error('状态区域元素不存在');
-            }
-        }
-        
-        // 显示通话提醒
-        function showCallAlert(message, show = true) {
-            if (elements.callAlert) {
-                elements.callAlert.textContent = message;
-                if (show) {
-                    elements.callAlert.classList.remove('d-none');
-                } else {
-                    elements.callAlert.classList.add('d-none');
-                }
+        // 显示错误信息
+        function showError(message) {
+            console.error(message);
+            if (elements.callRecordsTable) {
+                elements.callRecordsTable.innerHTML = `
+                    <tr>
+                        <td colspan="4" style="text-align: center; color: #dc3545;">${message}</td>
+                    </tr>
+                `;
             }
         }
         
@@ -405,231 +171,71 @@
             try {
                 console.log('加载通话记录...');
                 
-                // 确保DOM元素已加载
-                if (!elements.callRecordsTable || !elements.recordCount) {
-                    console.log('重新获取DOM元素...');
+                if (!elements.callRecordsTable) {
                     elements.callRecordsTable = document.getElementById('callRecordsTable');
-                    elements.recordCount = document.getElementById('recordCount');
-                    
-                    if (!elements.callRecordsTable || !elements.recordCount) {
-                        console.error('无法找到必要的DOM元素，尝试重新创建...');
-                        recreateMissingElements(['callRecordsTable', 'recordCount']);
-                        elements.callRecordsTable = document.getElementById('callRecordsTable');
-                        elements.recordCount = document.getElementById('recordCount');
-                    }
-                    
-                    if (!elements.callRecordsTable || !elements.recordCount) {
-                        throw new Error('无法恢复必要的DOM元素');
+                    if (!elements.callRecordsTable) {
+                        throw new Error('无法找到通话记录表格元素');
                     }
                 }
                 
-                // 设置基础URL - 适应不同环境
                 const baseUrl = 'https://telephonesystem.onrender.com';
+                const response = await fetch(`${baseUrl}/api/call-records`, {
+                    headers: {
+                        'Accept': 'application/json',
+                        'Cache-Control': 'no-cache'
+                    },
+                    credentials: 'include',
+                    mode: 'cors'
+                });
                 
-                // 尝试不同的API路径
-                const apiPaths = [
-                    '/api/call-records',
-                    '/api/call-history',
-                    '/api/debug-records'
-                ];
-                
-                let records = null;
-                let error = null;
-                
-                // 遍历所有可能的API路径
-                for (const apiPath of apiPaths) {
-                    try {
-                        console.log(`尝试从以下地址加载记录: ${baseUrl}${apiPath}`);
-                        
-                        const recordsResponse = await fetch(`${baseUrl}${apiPath}`, {
-                            method: 'GET',
-                            headers: {
-                                'Accept': 'application/json',
-                                'Cache-Control': 'no-cache'
-                            },
-                            credentials: 'include',
-                            mode: 'cors'
-                        });
-                        
-                        // 检查响应状态
-                        if (!recordsResponse.ok) {
-                            console.error(`API ${apiPath} 返回错误: ${recordsResponse.status} - ${recordsResponse.statusText}`);
-                            continue; // 尝试下一个API路径
-                        }
-                        
-                        // 解析响应数据
-                        const responseText = await recordsResponse.text();
-                        console.log(`API ${apiPath} 响应原始数据:`, responseText);
-                        
-                        let data;
-                        try {
-                            data = JSON.parse(responseText);
-                        } catch (parseError) {
-                            console.error(`解析响应数据失败:`, parseError);
-                            console.error(`响应内容:`, responseText);
-                            continue;
-                        }
-                        
-                        // 验证数据是否为数组
-                        if (Array.isArray(data)) {
-                            records = data;
-                            console.log(`成功从 ${apiPath} 加载 ${records.length} 条记录:`, records);
-                            break; // 找到有效数据，退出循环
-                        } else {
-                            console.log(`API ${apiPath} 返回的不是数组:`, data);
-                        }
-                    } catch (err) {
-                        console.error(`调用 ${apiPath} 失败:`, err);
-                        error = err;
-                    }
+                if (!response.ok) {
+                    throw new Error(`获取通话记录失败: ${response.status}`);
                 }
                 
-                // 处理结果
+                const records = await response.json();
+                
                 if (records && Array.isArray(records) && records.length > 0) {
-                    // 渲染通话记录
                     renderCallRecords(records);
-                    // 显示成功状态
-                    showStatus('通话记录加载成功', 'success');
                 } else {
-                    console.error('所有API尝试均失败或返回空数据');
-                    // 显示无记录信息
                     elements.callRecordsTable.innerHTML = `
                         <tr>
-                            <td colspan="4" class="text-center">暂无通话记录</td>
+                            <td colspan="4" style="text-align: center;">暂无通话记录</td>
                         </tr>
                     `;
-                    elements.recordCount.textContent = '0';
-                    showStatus('暂无通话记录', 'info');
                 }
-                
             } catch (error) {
                 console.error('加载通话记录失败:', error);
-                showStatus(`加载通话记录失败: ${error.message}`, 'danger');
-                
-                if (elements.callRecordsTable) {
-                    elements.callRecordsTable.innerHTML = `
-                        <tr>
-                            <td colspan="4" class="text-center">加载失败: ${error.message}</td>
-                        </tr>
-                    `;
-                }
-                
-                if (elements.recordCount) {
-                    elements.recordCount.textContent = '0';
-                }
-            }
-        }
-        
-        // 渲染活跃通话
-        function renderActiveCalls(calls) {
-            if (!elements.activeCallsContainer || !elements.activeCallsSection) {
-                console.error('活跃通话容器元素不存在');
-                return;
-            }
-            
-            if (calls && calls.length > 0) {
-                elements.activeCallsSection.classList.remove('d-none');
-                elements.activeCallsContainer.innerHTML = '';
-                
-                calls.forEach(call => {
-                    // 创建通话卡片
-                    const callCard = document.createElement('div');
-                    callCard.className = 'card mb-3';
-                    
-                    // 添加状态样式
-                    if (call.status === 'ringing') {
-                        callCard.classList.add('bg-warning');
-                    } else if (call.status === 'active') {
-                        callCard.classList.add('bg-success', 'text-white');
-                    }
-                    
-                    // 计算通话时长
-                    let durationText = '';
-                    if (call.status === 'active') {
-                        const startTime = new Date(call.answerTime || call.startTime);
-                        const durationSec = Math.floor((new Date() - startTime) / 1000);
-                        durationText = `通话时长: ${formatDuration(durationSec)}`;
-                    }
-                    
-                    // 设置卡片内容
-                    callCard.innerHTML = `
-                        <div class="card-body">
-                            <h5 class="card-title">${call.phoneNumber}</h5>
-                            <p class="card-text">状态: ${formatStatus(call.status)}</p>
-                            <p class="card-text">开始时间: ${formatTime(call.startTime)}</p>
-                            ${durationText ? `<p class="card-text">${durationText}</p>` : ''}
-                            <div class="btn-group">
-                                ${call.status === 'ringing' ? 
-                                    `<button class="btn btn-success" onclick="answerCall('${call.phoneNumber}')">接听</button>` : ''}
-                                <button class="btn btn-danger" onclick="hangupCall('${call.phoneNumber}')">挂断</button>
-                            </div>
-                        </div>
-                    `;
-                    
-                    // 添加到容器
-                    elements.activeCallsContainer.appendChild(callCard);
-                });
-            } else {
-                elements.activeCallsSection.classList.add('d-none');
+                showError(`加载失败: ${error.message}`);
             }
         }
         
         // 渲染通话记录
         function renderCallRecords(records) {
-            if (!elements.callRecordsTable || !elements.recordCount) {
-                console.error('通话记录表格元素不存在');
-                return;
-            }
+            if (!elements.callRecordsTable) return;
             
-            if (records && records.length > 0) {
-                // 按时间戳排序，最新的排在前面
-                records.sort((a, b) => b.timestamp - a.timestamp);
+            // 按时间戳排序，最新的排在前面
+            records.sort((a, b) => b.timestamp - a.timestamp);
+            
+            // 清空表格并添加记录
+            elements.callRecordsTable.innerHTML = '';
+            
+            records.forEach((record, index) => {
+                const row = document.createElement('tr');
+                const recordDate = new Date(record.timestamp);
+                const time = formatTime(recordDate);
                 
-                // 清空表格并添加记录
-                elements.callRecordsTable.innerHTML = '';
-                
-                records.forEach(record => {
-                    const row = document.createElement('tr');
-                    const recordDate = new Date(record.timestamp);
-                    
-                    // 格式化状态为徽章
-                    let statusBadge = record.status;
-                    if (record.status === '已发起') {
-                        statusBadge = '<span class="badge bg-info">已发起</span>';
-                    } else if (record.status === '响铃中') {
-                        statusBadge = '<span class="badge bg-warning">响铃中</span>';
-                    } else if (record.status === '已接通' || record.status === '已接听') {
-                        statusBadge = '<span class="badge bg-success">已接通</span>';
-                    } else if (record.status === '已挂断') {
-                        statusBadge = '<span class="badge bg-danger">已挂断</span>';
-                    } else if (record.status === '未接听') {
-                        statusBadge = '<span class="badge bg-secondary">未接听</span>';
-                    }
-                    
-                    // 设置行内容
-                    row.innerHTML = `
-                        <td>${record.phoneNumber}</td>
-                        <td>${statusBadge}</td>
-                        <td>${formatDateTime(recordDate)}</td>
-                        <td>${record.duration ? formatDuration(record.duration) : '无'}</td>
-                    `;
-                    
-                    // 添加到表格
-                    elements.callRecordsTable.appendChild(row);
-                });
-                
-                // 更新记录数
-                elements.recordCount.textContent = records.length;
-                
-            } else {
-                // 无记录情况
-                elements.callRecordsTable.innerHTML = `
-                    <tr>
-                        <td colspan="4" class="text-center">暂无通话记录</td>
-                    </tr>
+                row.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td>${record.phoneNumber}</td>
+                    <td>${time}</td>
+                    <td>
+                        <button class="btn btn-success" onclick="answerCall('${record.phoneNumber}')">接通</button>
+                        <button class="btn btn-danger" onclick="hangupCall('${record.phoneNumber}')">挂断</button>
+                    </td>
                 `;
-                elements.recordCount.textContent = '0';
-            }
+                
+                elements.callRecordsTable.appendChild(row);
+            });
         }
         
         // 清空通话记录
@@ -639,9 +245,7 @@
                     return;
                 }
                 
-                // 设置基础URL - 适应不同环境
                 const baseUrl = 'https://telephonesystem.onrender.com';
-                
                 const response = await fetch(`${baseUrl}/api/clear-history`, {
                     method: 'POST',
                     headers: {
@@ -652,26 +256,20 @@
                 });
                 
                 if (!response.ok) {
-                    throw new Error(`清空请求失败: ${response.status} ${response.statusText}`);
+                    throw new Error(`清空请求失败: ${response.status}`);
                 }
-                
-                // 显示成功消息
-                showToast('已清空所有通话记录');
-                showStatus('已清空所有通话记录', 'success');
                 
                 // 重新加载记录
                 await loadCallRecords();
             } catch (error) {
                 console.error('清空记录失败:', error);
-                showToast(`清空记录失败: ${error.message}`, true);
-                showStatus(`清空记录失败: ${error.message}`, 'danger');
+                alert(`清空记录失败: ${error.message}`);
             }
         }
         
         // 接听电话
         async function answerCall(phoneNumber) {
             try {
-                // 设置基础URL - 适应不同环境
                 const baseUrl = 'https://telephonesystem.onrender.com';
                 
                 // 获取活跃通话
@@ -684,15 +282,14 @@
                 });
                 
                 if (!response.ok) {
-                    throw new Error(`获取通话列表失败: ${response.status} ${response.statusText}`);
+                    throw new Error(`获取通话列表失败: ${response.status}`);
                 }
                 
                 const calls = await response.json();
-                
-                // 查找对应通话
                 const call = calls.find(c => c.phoneNumber === phoneNumber);
+                
                 if (!call) {
-                    showToast('找不到该号码的通话', true);
+                    alert('找不到该号码的通话');
                     return;
                 }
                 
@@ -700,8 +297,7 @@
                 const answerResponse = await fetch(`${baseUrl}/api/answer`, {
                     method: 'POST',
                     headers: { 
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json'
+                        'Content-Type': 'application/json' 
                     },
                     body: JSON.stringify({
                         callId: call.callId,
@@ -712,23 +308,20 @@
                 });
                 
                 if (!answerResponse.ok) {
-                    throw new Error(`接听请求失败: ${answerResponse.status} ${answerResponse.statusText}`);
+                    throw new Error(`接听请求失败: ${answerResponse.status}`);
                 }
                 
-                playSound('answer.mp3');
-                showToast('已接听通话');
                 setTimeout(loadCallRecords, 1000);
                 
             } catch (error) {
                 console.error('接听电话失败:', error);
-                showToast(`接听电话失败: ${error.message}`, true);
+                alert(`接听电话失败: ${error.message}`);
             }
         }
         
         // 挂断电话
         async function hangupCall(phoneNumber) {
             try {
-                // 设置基础URL - 适应不同环境
                 const baseUrl = 'https://telephonesystem.onrender.com';
                 
                 // 获取活跃通话
@@ -741,15 +334,14 @@
                 });
                 
                 if (!response.ok) {
-                    throw new Error(`获取通话列表失败: ${response.status} ${response.statusText}`);
+                    throw new Error(`获取通话列表失败: ${response.status}`);
                 }
                 
                 const calls = await response.json();
-                
-                // 查找对应通话
                 const call = calls.find(c => c.phoneNumber === phoneNumber);
+                
                 if (!call) {
-                    showToast('找不到该号码的通话', true);
+                    alert('找不到该号码的通话');
                     return;
                 }
                 
@@ -757,8 +349,7 @@
                 const hangupResponse = await fetch(`${baseUrl}/api/hangup`, {
                     method: 'POST',
                     headers: { 
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json'
+                        'Content-Type': 'application/json' 
                     },
                     body: JSON.stringify({
                         callId: call.callId,
@@ -769,131 +360,33 @@
                 });
                 
                 if (!hangupResponse.ok) {
-                    throw new Error(`挂断请求失败: ${hangupResponse.status} ${hangupResponse.statusText}`);
+                    throw new Error(`挂断请求失败: ${hangupResponse.status}`);
                 }
                 
-                playSound('end.mp3');
-                showToast('已挂断通话');
                 setTimeout(loadCallRecords, 1000);
                 
             } catch (error) {
                 console.error('挂断电话失败:', error);
-                showToast(`挂断电话失败: ${error.message}`, true);
+                alert(`挂断电话失败: ${error.message}`);
             }
-        }
-        
-        // 显示 Toast 消息
-        function showToast(message, isError = false) {
-            try {
-                // 检查并重新获取元素（以防它们之前不可用）
-                if (!elements.toastElement || !elements.toastBody) {
-                    elements.toastElement = document.getElementById('toastElement');
-                    elements.toastBody = document.getElementById('toastBody');
-                }
-                
-                if (!elements.toastElement || !elements.toastBody) {
-                    console.error('Toast 元素不存在');
-                    alert(message);
-                    return;
-                }
-                
-                elements.toastBody.textContent = message;
-                
-                if (isError) {
-                    elements.toastBody.classList.add('text-danger');
-                } else {
-                    elements.toastBody.classList.remove('text-danger');
-                }
-                
-                // 使用Bootstrap 5的Toast API
-                try {
-                    const toast = new bootstrap.Toast(elements.toastElement);
-                    toast.show();
-                } catch (err) {
-                    console.error('无法显示Toast:', err);
-                    alert(message);
-                }
-                
-            } catch (error) {
-                console.error('显示 Toast 失败:', error);
-                alert(message);
-            }
-        }
-        
-        // 播放声音
-        function playSound(soundFile) {
-            try {
-                const audio = new Audio(`/sounds/${soundFile}`);
-                audio.play().catch(e => console.error('播放声音失败:', e));
-            } catch (error) {
-                console.error('播放声音失败:', error);
-            }
-        }
-        
-        // 显示通知
-        function showNotification(title, body) {
-            if ('Notification' in window) {
-                if (Notification.permission === 'granted') {
-                    new Notification(title, {
-                        body: body,
-                        icon: '/favicon.ico'
-                    });
-                } else if (Notification.permission !== 'denied') {
-                    Notification.requestPermission().then(permission => {
-                        if (permission === 'granted') {
-                            new Notification(title, {
-                                body: body,
-                                icon: '/favicon.ico'
-                            });
-                        }
-                    });
-                }
-            }
-        }
-        
-        // 格式化状态
-        function formatStatus(status) {
-            switch (status) {
-                case 'ringing': return '响铃中';
-                case 'active': return '通话中';
-                case 'ended': return '已结束';
-                default: return status;
-            }
-        }
-        
-        // 格式化日期时间
-        function formatDateTime(date) {
-            return `${date.getFullYear()}-${padZero(date.getMonth() + 1)}-${padZero(date.getDate())} ${padZero(date.getHours())}:${padZero(date.getMinutes())}:${padZero(date.getSeconds())}`;
         }
         
         // 格式化时间
-        function formatTime(timeStr) {
-            const date = new Date(timeStr);
+        function formatTime(date) {
             return `${padZero(date.getHours())}:${padZero(date.getMinutes())}:${padZero(date.getSeconds())}`;
         }
         
-        // 格式化时长
-        function formatDuration(seconds) {
-            const mins = Math.floor(seconds / 60);
-            const secs = seconds % 60;
-            return `${mins}分${secs}秒`;
-        }
-        
-        // 补零
+        // 补零函数
         function padZero(num) {
             return num < 10 ? `0${num}` : num;
         }
         
         // 页面加载完成后初始化
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', function() {
-                // 等待页面完全加载后再初始化
-                setTimeout(initApp, 500);
-            });
+            document.addEventListener('DOMContentLoaded', initApp);
         } else {
-            // 如果页面已加载，延迟稍后初始化
-            setTimeout(initApp, 500);
+            initApp();
         }
     </script>
 </body>
-</html>
+</html> 
