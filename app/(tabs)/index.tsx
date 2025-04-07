@@ -1766,10 +1766,10 @@ export default function PhoneScreen() {
         options={{
           title: '电话',
           headerStyle: {
-            backgroundColor: isDark ? '#000000' : '#f2f2f7',
+            backgroundColor: '#000000', // 始终使用黑色背景，不再根据isDark变化
           },
           headerTitleStyle: {
-            color: isDark ? '#ffffff' : '#000000',
+            color: '#FFFFFF', // 标题始终为白色
             fontSize: 20,
             fontWeight: 'bold',
           },
@@ -1789,7 +1789,7 @@ export default function PhoneScreen() {
       />
       
       <ThemedView style={styles.container}>
-        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+        <StatusBar barStyle="light-content" />
         
         {menuVisible && (
           <View style={styles.menuOverlay}>
@@ -1821,8 +1821,8 @@ export default function PhoneScreen() {
         
         {(!dialPadVisible || (dialPadVisible && phoneNumber.length === 0)) && (
           <>
-            <View style={styles.tabContainer}>
-              <View style={styles.tabWrapper}>
+            <View style={[styles.tabContainer, { backgroundColor: '#000000' }]}>
+              <View style={[styles.tabWrapper, { backgroundColor: '#000000' }]}>
                 <TouchableOpacity
                   style={[
                     styles.tab,
@@ -1860,7 +1860,7 @@ export default function PhoneScreen() {
                 />
               )}
               keyExtractor={(item, index) => `call-item-${item.id}-${index}`}
-              style={styles.callList}
+              style={[styles.callList, { backgroundColor: '#000000' }]}
               contentContainerStyle={{ 
                 paddingBottom: dialPadVisible ? height * 0.4 + 20 : 100
               }}
